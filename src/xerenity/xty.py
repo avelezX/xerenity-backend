@@ -136,21 +136,21 @@ class Xerenity:
 
         return df
 
-    def get_date_columns(self) -> list:
+    def get_date_columns(self,table_name: str = None ) -> list:
         """
         Returns a list of column names with datetime64[ns] data type in the DataFrame.
 
         Returns:
         - List[str]: List of column names with datetime data type.
         """
-        df = self.convert_df(self.read_table().data)
+        df = self.convert_df(self.read_table(table_name=table_name).data,table_name=table_name)
         return [column for column in df.columns if df[column].dtype == 'datetime64[ns]']
 
     # --------------------------------------
     # DF Advanced Manipulation Functions
     # --------------------------------------
 
-    def get_date_range(self, date_column_name: str = None, initial_date: str = None,
+    def get_date_range(self,table_name: str = None ,date_column_name: str = None, initial_date: str = None,
                        final_date: str = None) -> APIResponse:
         """
         Filters data based on date column and specified date range.
@@ -163,8 +163,8 @@ class Xerenity:
         Returns:
         - APIResponse: Filtered DataFrame based on the specified date range.
         """
-        base_table = self.session.table(table_name=self.data_name).select('*')
-        date_cols = self.get_date_columns()
+        base_table = self.session.table(table_name=table_name).select('*')
+        date_cols = self.get_date_columns(table_name=table_name)
         filter_by = date_column_name
 
         if len(date_cols) == 0:
