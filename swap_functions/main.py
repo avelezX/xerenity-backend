@@ -38,9 +38,9 @@ ibr_on=xty.BanRep().get_econ_data_last(id_serie=19).data[0]['valor']/100
 ##### Cronstruir los datos para el calculo de la curva. 
 
 #####Determinacion del rango de fechas de las cuales se quiere traer los datos de IBR
-init_date=datetime(2023, 11, 7).date()
+init_date=datetime(2023, 11, 8).date()
 final_date=init_date
-start_date=init_date
+start_date=datetime(2023, 12, 15).date()
 day_to_avoid_fwd_ois=7
 days_to_on=8
 
@@ -67,10 +67,13 @@ def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on
 ##### Creacion de la curva FWD 
 
 
-curve=full_ibr_curve_creation(start_date,final_date,day_to_avoid_fwd_ois,days_to_on)
+curve=full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on)
 fwd_curve=fwd_rates_generation(curve,start_date,inverval_tenor=3,interval_period='m')
 
-print(fwd_curve)
+fwd_curve.to_clipboard()
+
+
+
 
 
 

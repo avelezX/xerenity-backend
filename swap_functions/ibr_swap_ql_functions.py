@@ -69,7 +69,7 @@ def fwd_rates_generation(curve,start_date,inverval_tenor=3,interval_period='m'):
             #print(f"1-month {i/12} year forward rate: {forward_rate:.4%}")
         except:
             
-            print('tenor to calculate not un curve helper')
+            print('fwd curve tenor to calculate not in curve quotes')
 
     df = pd.DataFrame(list(zip(dates, forward_rates)), columns=['Maturity Date', 'rate'])
     df['Maturity Date'] = df['Maturity Date'].apply(ql_to_datetime)

@@ -12,10 +12,12 @@ cpi=implied_inflation_calc()
 uvr_proyec=calculo_serie_uvr(cpi_serie=cpi['total_cpi'])
 
 
-total_cpi_mom_image(total_cpi_monthly=cpi['total_cpi_monthly'],today=today)
-total_cpi_mom_plot(total_cpi_monthly=cpi['total_cpi_monthly'],today=today)
-total_cpi_yoy_image(total_cpi_yoy=cpi['total_cpi_yoy'],today=today)
-total_cpi_yoy_plot(total_cpi_yoy=cpi['total_cpi_yoy'],today=today)
-uvr_plot(uvr_proyec,today=today.date())
-uvr_image(uvr_proyec,today=today.date())
+### Creacion de series de tiempo y figuras para entrega temporal. 
+
+#total_cpi_mom_image(total_cpi_monthly=cpi['total_cpi_monthly'],today=today)
+#total_cpi_mom_plot(total_cpi_monthly=cpi['total_cpi_monthly'],today=today)
+#total_cpi_yoy_image(total_cpi_yoy=cpi['total_cpi_yoy'],today=today)
+#total_cpi_yoy_plot(total_cpi_yoy=cpi['total_cpi_yoy'],today=today)
+#uvr_plot(uvr_proyec,today=today.date())
+#uvr_image(uvr_proyec,today=today.date())
 
