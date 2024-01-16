@@ -8,6 +8,7 @@ from bond_functions.bond_structure import tes_bond_structure
 from bond_functions.bond_curve_structures import BondCurve
 from bond_functions.tes_quant_lib_details import depo_helpers,tes_quantlib_det
 from utilities.date_functions import ql_to_datetime
+from db_call.db_call import get_last_banrep_1,get_last_cpi,get_tes_table
 import datetime as dt
 import QuantLib as ql
 import pandas as pd
@@ -28,7 +29,8 @@ def implied_inflation_calc():
     calc_date=ql.Date.todaysDate()
     today=calc_date
     # Traer la tasa del banco central usando el ultimo dato del banrep series. 
-    central_bank_rate=xty.BanRep().get_econ_data_last(id_serie=1).data[0]['valor']/100
+    central_bank_rate=get_last_banrep_1()/100
+
     print('----------Tasa del banco central------------')
     print(central_bank_rate)
 
@@ -37,7 +39,7 @@ def implied_inflation_calc():
     depo_rates = [central_bank_rate,central_bank_rate]
     depo_help=depo_helpers(depo_maturities,depo_rates,details=tes_quantlib_det)
     # Traer la informacion de los TES activos de la tabla tes
-    tes_info=xty.read_table_df('tes')
+    tes_info=get_tes_table()
 
     # Crear la clase bonos para los bonos en COP ( nominales tasa fija)
     cop=BondCurve(currency='COP',country='col',bond_info_df=tes_info,supabase=xty)
@@ -52,7 +54,8 @@ def implied_inflation_calc():
     cop_yield_curve=cop.yield_curve_ql(calc_date,helpers,depo_help)
 
     #TODO Traer ultimo dato de inflacion usando un lag de 12 meses
-    inflation_print=xty.CPI().lag_last(lag_value=12, canasta_id= 1)/100
+    inflation_print=get_last_cpi()/100
+
     print('----------Tasa de inflacion------------')
     print(central_bank_rate)
 
@@ -107,7 +110,7 @@ def implied_inflation_calc():
 
 
 
-    df=xty.CPI().lag(lag_value=12, canasta_id= 1)
+    df=get_last_cpi()
 
     df['Total'] = df['indice']
     df['fecha'] = pd.to_datetime(df['fecha'])

@@ -4,6 +4,7 @@ import os
 from inflation_query.Inflation_query import implied_inflation_calc
 from src.xerenity.xty import Xerenity
 from utilities.date_functions import add_months
+from db_call.db_call import get_last_banrep_8
 import pandas as pd
 import QuantLib as ql
 from datetime import datetime
@@ -18,7 +19,7 @@ def calculo_serie_uvr(cpi_serie=None):
     
     indice=cpi_serie
     indice.index = pd.to_datetime(indice.index).date
-    uvr=xty.BanRep().get_econ_data_last_n(id_serie=8,n=365*2).data
+    uvr=get_last_banrep_8()
     uvr=pd.DataFrame(uvr)
     uvr['fecha'] = pd.to_datetime(uvr['fecha'])
     uvr.drop('id_serie', axis=1, inplace=True)

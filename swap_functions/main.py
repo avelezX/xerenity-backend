@@ -8,7 +8,7 @@ from utilities.rate_conversion_functions import nom_to_effective
 from swap_functions.ibr_quantlib_details import ibr_quantlib_det,ibr_overnight_index,ibr_swap_cupon_helper,depo_helpers_ibr
 from swap_functions.ibr_swap_ql_functions import ibr_swaps_quotes,crear_objeto_curva_ibr,fwd_rates_generation
 from swap_functions.quotes_query import ibr_mean_query,ibr_mean_query_to_dictionary
-
+from db_call.db_call import get_banrep_19,get_ibr_cluster_table
 import pandas as pd
 import QuantLib as ql
 import plotly.graph_objects as go
@@ -26,7 +26,8 @@ xty = Xerenity(
 
 ##########
 #Traer la serie de IBR swap overnight, en ea. 
-ibr_on=xty.BanRep().get_econ_data_last(id_serie=19).data[0]['valor']/100
+#ibr_on=xty.BanRep().get_econ_data_last(id_serie=19).data[0]['valor']/100
+ibr_on=get_banrep_19()
 
 
 ########
@@ -38,16 +39,16 @@ ibr_on=xty.BanRep().get_econ_data_last(id_serie=19).data[0]['valor']/100
 ##### Cronstruir los datos para el calculo de la curva. 
 
 #####Determinacion del rango de fechas de las cuales se quiere traer los datos de IBR
-init_date=datetime(2023, 12, 19).date()
+init_date=datetime(2024, 1, 10).date()
 final_date=init_date
-start_date=datetime(2023, 12, 24).date()
+start_date=datetime(2024, 1, 10).date()
 day_to_avoid_fwd_ois=7
 days_to_on=8
 
 
 def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on):
     #####Consulta de datos IBR a Supabase
-    ibr_data=pd.DataFrame(xty.get_date_range(table_name='ibr_swaps_cluster',date_column_name='execution_timestamp').data)
+    ibr_data=pd.DataFrame(get_ibr_cluster_table())
     ###Filtramos el Query por los parametros determinados. 
     ibr_cluster_mean=ibr_mean_query(ibr_data,init_date,final_date,day_to_avoid_fwd_swaps=day_to_avoid_fwd_ois)
     ###creacion del directorio para llamarlos como una curva. Esta funcion devuelve in df. 

@@ -1,48 +1,74 @@
 #import sys
 #sys.path.append("/Users/avelezxerenity/Documents/GitHub/pysdk")
 from datetime import datetime
-from utilities.colombia_calendar import calendar_colombia
 from utilities.date_functions import datetime_to_ql,ql_to_datetime
-from utilities.colombia_calendar import calendar_colombia
-from bond_functions.tes_quant_lib_details import tes_quantlib_det
 import pandas as pd
 import QuantLib as ql
 import pandas as pd
-
 from datetime import datetime
-
 import numpy_financial as npf
 import pandas as pd
 
 
 class Loan:
-    def __init__(self, term_months, interest_rate, original_balance, start_date):
+    def __init__(self,interest_rate, periodicity,number_of_payments,start_date,original_balance,rate_type='fixed'):
         """
-        Initializes a Loan object.
+        Calculates the loan payment for a given periodicity.
 
         Parameters:
-        - term_years (int): The loan term in years.
-        - interest_rate (float): The annual simple interest rate.
-        - original_balance (float): The initial loan amount.
-        - start_date (datetime): The start date of the loan.
+        - interest_rate (float): Annual interest rate as a percentage.
+        - num_payments (int): Total number of payments.
+        - original_balance (float): The loan amount.
+        - periodicity (int): Number of payments per year (e.g., 12 for monthly, 6 for bimonthly, 4 for quarterly, 1 for yearly).
+
+        Returns:
+        - float: The calculated loan payment.
         """
-        self.term_months = term_months
+
+        self.periodicity= periodicity
+        self.number_of_payments=number_of_payments
         self.interest_rate = interest_rate
         self.original_balance = original_balance
         self.start_date = start_date
         self.start_date_ql = datetime_to_ql(self.start_date)
+        self.rate_type=rate_type
 
-    def calculate_monthly_payment(self):
+        
+
+        self.number_to_user = {'Anual': 1, 'Semestral': 0.5, 'Trimestral': 1/4, 'Bimensual': 1/6, 'Mensual': 1/12}
+
+
+    # def calculate_monthly_payment(self):
+    #     """
+    #     Calculates the monthly payment for the loan.
+
+    #     Returns:
+    #     - float: The calculated monthly payment.
+    #     """
+    #     monthly_interest_rate = self.interest_rate / 12 / 100
+    #     num_payments = self.term_months
+    #     monthly_payment = npf.pmt(monthly_interest_rate, num_payments, -self.original_balance)
+    #     return monthly_payment
+    
+
+    def calculate_custom_period_payment(self):
         """
-        Calculates the monthly payment for the loan.
+        Calculates the loan payment for a given periodicity.
+
+        Parameters:
+        - interest_rate (float): Annual interest rate as a percentage.
+        - num_payments (int): Total number of payments.
+        - original_balance (float): The loan amount.
+        - periodicity (int): Number of payments per year (e.g., 12 for monthly, 6 for bimonthly, 4 for quarterly, 1 for yearly).
 
         Returns:
-        - float: The calculated monthly payment.
+        - float: The calculated loan payment.
         """
-        monthly_interest_rate = self.interest_rate / 12 / 100
-        num_payments = self.term_months
-        monthly_payment = npf.pmt(monthly_interest_rate, num_payments, -self.original_balance)
-        return monthly_payment
+        annual_interest_rate = self.interest_rate / 100
+        periodic_interest_rate = annual_interest_rate / (1/self.number_to_user[self.periodicity])
+        discount_factor = ((1 + periodic_interest_rate) ** self.number_of_payments - 1) / (periodic_interest_rate * (1 + periodic_interest_rate) ** self.number_of_payments)
+        payment = self.original_balance / discount_factor
+        return payment
 
     def generate_cash_flow_table(self):
         """
@@ -51,22 +77,26 @@ class Loan:
         Returns:
         - pd.DataFrame: A DataFrame containing the cash flow details.
         """
-        monthly_payment = self.calculate_monthly_payment()
-        periods = list(range(1, self.term_months + 1))
+        monthly_payment = self.calculate_custom_period_payment()
+        periods = list(range(1, self.number_of_payments + 1))
 
         interest_payment = []
         principal_payment = []
         ending_balance = []
-
+        date_list=[]
         current_balance = self.original_balance
+
+        
+
         for i in range(len(periods)):
-            interest_payment.append(current_balance * (self.interest_rate / 100 / 12))
+            date_list.append(self.start_date_ql + ql.Period(int((i+1)*(12*self.number_to_user[self.periodicity])), ql.Months))
+            interest_payment.append(current_balance * (self.interest_rate / 100 *self.number_to_user[self.periodicity]))
             principal_payment.append(monthly_payment - interest_payment[-1])
             ending_balance.append(current_balance - principal_payment[-1])
-
+            
             current_balance = ending_balance[-1]
 
-        date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
+        #date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
         date_list = [ql_to_datetime(ql_date) for ql_date in date_list]
         cf_data = {
             'Date': date_list,
@@ -81,5 +111,52 @@ class Loan:
         cf_table = cf_table[['Date', 'Beginning Balance', 'Payment', 'Interest', 'Principal', 'Ending Balance']]
 
         return cf_table
+    
+    # def generate_cash_flow_table_ibr(self, init_date):
+    #     """
+    #     Generates a cash flow table for the loan.
 
+    #     Returns:
+    #     - pd.DataFrame: A DataFrame containing the cash flow details.
+    #     """
 
+        
+
+    #     monthly_payment = self.calculate_custom_period_payment()
+    #     periods = list(range(1, self.number_of_payments + 1))
+
+    #     interest_payment = []
+    #     principal_payment = []
+    #     ending_balance = []
+    #     date_list=[]
+    #     current_balance = self.original_balance
+
+        
+
+    #     for i in range(len(periods)):
+    #         date_list.append(self.start_date_ql + ql.Period(int((i+1)*(12*self.number_to_user[self.periodicity])), ql.Months))
+
+            
+
+    #         interest_payment.append(current_balance * (self.interest_rate / 100 *self.number_to_user[self.periodicity]))
+    #         principal_payment.append(monthly_payment - interest_payment[-1])
+    #         ending_balance.append(current_balance - principal_payment[-1])
+            
+    #         current_balance = ending_balance[-1]
+
+    #     #date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
+    #     date_list = [ql_to_datetime(ql_date) for ql_date in date_list]
+    #     cf_data = {
+    #         'Date': date_list,
+    #         'Interest': interest_payment,
+    #         'Principal': principal_payment,
+    #         'Payment': [monthly_payment] * len(periods),
+    #         'Ending Balance': ending_balance,
+    #         'Beginning Balance': [self.original_balance] + ending_balance[:-1]
+    #     }
+
+    #     cf_table = pd.DataFrame(data=cf_data, index=periods)
+    #     cf_table = cf_table[['Date', 'Beginning Balance', 'Payment', 'Interest', 'Principal', 'Ending Balance']]
+
+    #     return cf_table
+    
