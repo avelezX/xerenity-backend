@@ -11,7 +11,7 @@ import pandas as pd
 
 
 class Loan:
-    def __init__(self,interest_rate, periodicity,number_of_payments,start_date,original_balance,rate_type='fixed'):
+    def __init__(self,interest_rate, periodicity,number_of_payments,start_date,original_balance,rate_type='fixed',db_info=None):
         """
         Calculates the loan payment for a given periodicity.
 
@@ -32,7 +32,8 @@ class Loan:
         self.start_date = start_date
         self.start_date_ql = datetime_to_ql(self.start_date)
         self.rate_type=rate_type
-
+        self.db_info=db_info
+      
         
 
         self.number_to_user = {'Anual': 1, 'Semestral': 0.5, 'Trimestral': 1/4, 'Bimensual': 1/6, 'Mensual': 1/12}
@@ -112,51 +113,34 @@ class Loan:
 
         return cf_table
     
-    # def generate_cash_flow_table_ibr(self, init_date):
-    #     """
-    #     Generates a cash flow table for the loan.
-
-    #     Returns:
-    #     - pd.DataFrame: A DataFrame containing the cash flow details.
-    #     """
-
+    def generate_rates_ibr(self,value_date,periodicidad_tasa='MV'):
         
-
-    #     monthly_payment = self.calculate_custom_period_payment()
-    #     periods = list(range(1, self.number_of_payments + 1))
-
-    #     interest_payment = []
-    #     principal_payment = []
-    #     ending_balance = []
-    #     date_list=[]
-    #     current_balance = self.original_balance
-
+        number_to_user = {'Anual': 1, 'Semestral': 0.5, 'Trimestral': 1/4, 'Bimensual': 1/6, 'Mensual': 1/12}
+        periods = list(range(1, self.number_of_payments + 1))
+        date_list=[]
         
-
-    #     for i in range(len(periods)):
-    #         date_list.append(self.start_date_ql + ql.Period(int((i+1)*(12*self.number_to_user[self.periodicity])), ql.Months))
-
-            
-
-    #         interest_payment.append(current_balance * (self.interest_rate / 100 *self.number_to_user[self.periodicity]))
-    #         principal_payment.append(monthly_payment - interest_payment[-1])
-    #         ending_balance.append(current_balance - principal_payment[-1])
-            
-    #         current_balance = ending_balance[-1]
-
-    #     #date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
-    #     date_list = [ql_to_datetime(ql_date) for ql_date in date_list]
-    #     cf_data = {
-    #         'Date': date_list,
-    #         'Interest': interest_payment,
-    #         'Principal': principal_payment,
-    #         'Payment': [monthly_payment] * len(periods),
-    #         'Ending Balance': ending_balance,
-    #         'Beginning Balance': [self.original_balance] + ending_balance[:-1]
-    #     }
-
-    #     cf_table = pd.DataFrame(data=cf_data, index=periods)
-    #     cf_table = cf_table[['Date', 'Beginning Balance', 'Payment', 'Interest', 'Principal', 'Ending Balance']]
-
-    #     return cf_table
+        start_date_ql = self.start_date_ql
+        for i in range(len(periods)):
+            date_list.append(start_date_ql + ql.Period(int((i)*(12*number_to_user[self.periodicity])), ql.Months))
+        #return dates
+        dates=date_list
+        tasas=pd.DataFrame(self.db_info[periodicidad_tasa]) #pd.DataFrame(get_last_n_banrep_ibr_1m_nom())
+        # Convert 'fecha' column to datetime if it's not already in datetime format
+        tasas['fecha'] = pd.to_datetime(tasas['fecha'])
+        # Create a new DataFrame with 'your_date_list'
+        result_data = {'fechas': dates}
+        # Create an empty 'tasa' column in the result DataFrame
+        result_data['tasa'] = [None] * len(dates)
+        result_df = pd.DataFrame(result_data)
+        #Iterate through each date in your_date_list
+        for i, date in enumerate(dates):
+            # Find the closest date in the 'tasas' DataFrame
+            if ql_to_datetime(date) < value_date:
+                closest_date = tasas['fecha'].sub(pd.Timestamp(ql_to_datetime(date))).abs().idxmin()
+            # Assign the corresponding 'tasa' value to the result DataFrame
+                closest_value = tasas.at[closest_date, 'valor']
+                result_df.at[i, 'tasa'] = closest_value
+            #date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
+        return result_df
+        
     
