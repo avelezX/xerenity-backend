@@ -1,3 +1,5 @@
+# %%
+
 import sys
 sys.path.append("/Users/avelezxerenity/Documents/GitHub/pysdk")
 import os
@@ -23,32 +25,29 @@ xty = Xerenity(
 ### Funcion para crear la curva de swaps. 
 ############
 
-
 ##########
 #Traer la serie de IBR swap overnight, en ea. 
 #ibr_on=xty.BanRep().get_econ_data_last(id_serie=19).data[0]['valor']/100
-ibr_on=get_banrep_19()
 
-
+db_info={'ibr_cluster_table':get_ibr_cluster_table(),'ibr_on':get_banrep_19()}
 ########
 # Ajustando los parametros 
-
 #today=date.today()
-
-
 ##### Cronstruir los datos para el calculo de la curva. 
 
 #####Determinacion del rango de fechas de las cuales se quiere traer los datos de IBR
-init_date=datetime(2024, 1, 10).date()
+init_date=datetime(2024, 1, 10).date()  
 final_date=init_date
 start_date=datetime(2024, 1, 10).date()
 day_to_avoid_fwd_ois=7
 days_to_on=8
 
 
-def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on):
+
+def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on,db_info):
     #####Consulta de datos IBR a Supabase
-    ibr_data=pd.DataFrame(get_ibr_cluster_table())
+    
+    ibr_data=pd.DataFrame(db_info['ibr_cluster_table'])
     ###Filtramos el Query por los parametros determinados. 
     ibr_cluster_mean=ibr_mean_query(ibr_data,init_date,final_date,day_to_avoid_fwd_swaps=day_to_avoid_fwd_ois)
     ###creacion del directorio para llamarlos como una curva. Esta funcion devuelve in df. 
@@ -59,7 +58,7 @@ def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on
     OIS_helpers=ibr_swaps_quotes(ibr_query.to_dict(orient='records')) 
 
     #####Poniendole el ON como helper a la curva
-    OIS_helpers.append(depo_helpers_ibr(ibr_on,days_to_on,ql.Days)) 
+    OIS_helpers.append(depo_helpers_ibr(db_info['ibr_on'],days_to_on,ql.Days)) 
 
     #### Crendo el objeto curva en la salida. 
     return crear_objeto_curva_ibr(OIS_helpers)
@@ -68,8 +67,8 @@ def full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on
 ##### Creacion de la curva FWD 
 
 ###Creacion de la curva spot
-curve=full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on)
-
+curve=full_ibr_curve_creation(init_date,final_date,day_to_avoid_fwd_ois,days_to_on,db_info=db_info)
+curve.
 ###Creacion de la curva FWD. 
 fwd_curve=fwd_rates_generation(curve,start_date,inverval_tenor=3,interval_period='m')
 
@@ -102,3 +101,5 @@ xty.session.table('ibr_implicita').insert(fwd_curve.to_dict(orient='records')).e
 
 
 
+
+# %%
