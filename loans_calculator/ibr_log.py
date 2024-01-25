@@ -27,8 +27,12 @@ curve=curve_details.crear_curva(days_to_on=1)
 dia_creacion=emision = datetime(year=2022, month=12, day=21)
 value_date=datetime(year=2024,month=1,day=24)
 
-ibr_loan=Loan(interest_rate=5,periodicity='Mensual',number_of_payments=60,start_date=dia_creacion,original_balance=10000,rate_type='IBR',db_info=period_to_curve)
-ibr_loan.generate_rates_ibr(value_date=value_date,curve=curve,periodicidad_tasa='SV')
+fix_loan=Loan(interest_rate=5,periodicity='Mensual',number_of_payments=24,start_date=dia_creacion,original_balance=10000,rate_type='FIX',db_info=period_to_curve)
+fix_loan.generate_cash_flow_table()
+
+
+ibr_loan=Loan(interest_rate=5,periodicity='Mensual',number_of_payments=24,start_date=dia_creacion,original_balance=10000,rate_type='IBR',db_info=period_to_curve)
+ibr_loan.generate_rates_ibr(value_date=value_date,curve=curve,tipo_de_cobro='por_dias_360',periodicidad_tasa='MV')
 
 
 
