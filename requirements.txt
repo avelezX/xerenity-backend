@@ -31,3 +31,6 @@ QuantLib
 seaborn
 plotly
 numpy_financial
+Django
+gunicorn
+djangorestframework

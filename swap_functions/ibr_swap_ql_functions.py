@@ -1,7 +1,7 @@
 import sys
 sys.path.append("/Users/avelezxerenity/Documents/GitHub/pysdk")
 import os
-from inflation_query.Inflation_query import implied_inflation_calc
+#from inflation_query.Inflation_query import implied_inflation_calc
 from src.xerenity.xty import Xerenity
 from utilities.date_functions import add_months,ql_to_datetime,datetime_to_ql
 from swap_functions.ibr_quantlib_details import ibr_quantlib_det,ibr_overnight_index,ibr_swap_cupon_helper,depo_helpers_ibr
@@ -10,10 +10,10 @@ import pandas as pd
 import QuantLib as ql
 import plotly.graph_objects as go
 from datetime import datetime,date
-xty = Xerenity(
-    username=os.getenv('XTY_USER'),
-    password=os.getenv('XTY_PWD'),
-)
+#xty = Xerenity(
+#    username=os.getenv('XTY_USER'),
+#    password=os.getenv('XTY_PWD'),
+#)
 
 ###################
 ## BIG TODO la curva tiene ql.Actual360. Esta deberia ser 
