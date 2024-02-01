@@ -31,7 +31,6 @@ def ibr_swaps_quotes(ibr_quotes):
 
     OIS_helpers = []
     for quote in ibr_quotes:
-        print(quote)
 
         if ql.Period(quote['tenor'],dates_convention_to_ql[quote['tenor_unit']])<=ql.Period(18,ql.Months):
             OIS_helpers.append(depo_helpers_ibr(quote['rate'],quote['tenor'],dates_convention_to_ql[quote['tenor_unit']]))

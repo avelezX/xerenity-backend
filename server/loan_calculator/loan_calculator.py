@@ -86,6 +86,7 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
             self.loan.rate_type = 'IBR'
             today = datetime.today().date()
+
             value_date = datetime(year=today.year, month=today.month, day=today.day)
 
             curve_details = full_ibr_curve_creation(
