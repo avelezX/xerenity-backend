@@ -23,15 +23,22 @@ class Xerenity:
 
         # Connection Client Initialization
         self.session: Client = create_client(url, key, options=opts)
-
-
+        collector_bearer= os.getenv('XTY_COLLECTOR')
+        self.session.postgrest.session.headers["Authorization"] = "Bearer " + collector_bearer
+        print(collector_bearer)
+        print("----COllector bearer----")
+        
+        """
+        print(username)
+        print("------USER----")
+        
         self.session.auth.sign_in_with_password(
             {
                 "email": username,
                 "password": password
             }
         )
-
+        """
     # ---------------------------------------
     # Subclases for Modules
     # --------------------------------------
@@ -183,10 +190,12 @@ class Xerenity:
 
         # Perform date range filtering
         if initial_date and final_date:
-            return base_table.gte(column=filter_by, value=initial_date).lte(column=filter_by, value=final_date).execute()
+            return base_table.gte(column=filter_by, value=initial_date).lte(column=filter_by, value=final_date).order(column=filter_by, desc=True).execute()
         elif initial_date:
             return base_table.gte(column=filter_by, value=initial_date).execute()
         elif final_date:
             return base_table.lte(column=filter_by, value=final_date).execute()
         else:
             return base_table.execute()
+
+

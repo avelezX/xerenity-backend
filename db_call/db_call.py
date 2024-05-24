@@ -9,34 +9,8 @@ xty = Xerenity(
 )
 
 
-diccionario_series={
-"Tasa de Desempleo":1,
-"Tasa de Empleo":2,
-"PIB Trimestral - Oferta - Total - Precios Constantes de 2015":3,
-"PIB Trimestral - Oferta - Construcci�n - Precios Constantes de 2015":4,
-"PIB Trimestral - Demanda - Formaci�n bruta de capital - Precios Constantes de 2015":5,
-"PIB Trimestral - Demanda - Consumo Final - Precios Constantes de 2015":6,
-"IPC Base 2018":7,
-"Tasa de Politica Monetaria":8,
-"Indicador Bancario de Referencia (IBR) overnight, nominal":9,
-"Indicador Bancario de Referencia (IBR) overnight, efectiva":10,
-"Indicador Bancario de Referencia (IBR) 1 Mes, nominal":11,
-"Indicador Bancario de Referencia (IBR) 1 Mes, efectiva":12,
-"Indicador Bancario de Referencia (IBR) 3 Meses, nominal":13,
-"Indicador Bancario de Referencia (IBR) 3 Meses, efectiva":14,
-"Indicador Bancario de Referencia (IBR) 6 Meses, nominal":15,
-"Indicador Bancario de Referencia (IBR) 6 Meses, efectiva":16,
-"Indicador Bancario de Referencia (IBR) 12 Meses, nominal":17,
-"Indicador Bancario de Referencia (IBR) 12 Meses, efectiva":18,
-    
-}
-
-
-
-
 ##########
 #Traer la serie de IBR swap overnight, en ea. 
-
 
 def get_last_banrep(serie_banrep,n=0):
     diccionario_series={
@@ -58,6 +32,7 @@ def get_last_banrep(serie_banrep,n=0):
         "Indicador Bancario de Referencia (IBR) 6 Meses, efectiva":16,
         "Indicador Bancario de Referencia (IBR) 12 Meses, nominal":17,
         "Indicador Bancario de Referencia (IBR) 12 Meses, efectiva":18,
+        "Unidad de Valor Real (UVR)":19
         }
     serie_br=diccionario_series[serie_banrep]
     if n==0:
@@ -81,10 +56,10 @@ def get_last_banrep(serie_banrep,n=0):
 
 
 ######### FALTA EL UVR EN LA NUEVA TABLA DE SUPABASE#####
-def get_last_banrep_8():
-    return xty.BanRep().get_econ_data_last_n(id_serie=8,n=365*2).data
+#def get_last_banrep_8():
+#    return xty.BanRep().get_econ_data_last_n(id_serie=8,n=365*2).data
 ####get_last_banrep(,365*2).data
-
+#get_last_banrep("Unidad de Valor Real (UVR)",n=365*2).data
 
 #def get_banrep_16():
 #    return xty.BanRep().get_econ_data_last(id_serie=16).data[0]['valor']/100
@@ -105,8 +80,11 @@ def get_last_banrep_8():
 
 
 
-def get_ibr_cluster_table():
-    return xty.get_date_range(table_name='ibr_swaps_cluster',date_column_name='execution_timestamp').data
+def get_ibr_cluster_table(initial_date,final_date):
+    return xty.get_date_range(table_name='ibr_swaps_cluster',
+                              initial_date=initial_date,
+                              final_date=final_date,
+                              date_column_name='execution_timestamp').data
 
 def get_tes_table():
     return xty.read_table_df('tes')

@@ -18,7 +18,8 @@ class full_ibr_curve_creation:
         noon_time = time(12, 0, 0)  # Noon time
         return current_time >= noon_time
 
-    def __init__(self, desired_date_valuation=ql.Date.todaysDate(), calendar=calendar_colombia(),
+    def __init__(self, desired_date_valuation=ql.Date.todaysDate(),
+                 calendar=calendar_colombia(),
                  day_to_avoid_fwd_ois=7, db_info=None):
         self.desired_date = desired_date_valuation
         self.calendar = calendar
