@@ -108,11 +108,26 @@ class Loan:
 
         return cf_table
 
-    def generate_rates_ibr(self, value_date, curve, tipo_de_cobro='por_dias_360', periodicidad_tasa='MV'):
+    def generate_rates_ibr(self,
+                           value_date,
+                           curve,
+                           tipo_de_cobro='por_dias_360',
+                           periodicidad_tasa='MV',
+                           grace_type=None,
+                           grace_period=None):
         # Value date debe ser el dia actual, para que la curva IBR coincida con la valoracion
         # Curve deberia ser una curva de IBR generada con la valoracion de la curva actual 
         # Tipo de cobro depende del banco que emite el credito. 
         # Periodicidad tasa "SV", "TV"o "MV"
+
+        # grace_type puede ser None o "capital" "interes" "ambos"
+        # grace_period puede ser None o un numero entero
+
+        if grace_period is None:
+            print("Hacer algo cuando periodo de gracia es nulo")
+
+        if grace_type is None:
+            print("Hacer algo cuando el tipo de gracia es nulo")
 
         if tipo_de_cobro is None:
             tipo_de_cobro = 'por_dias_360'

@@ -21,7 +21,6 @@ class LoanCalculatorServer(XerenityFunctionServer):
             'number_of_payments': [float, int],
             'start_date': [str],
             'original_balance': [float, int],
-
         }
 
         body_fields = set(expected).difference(body.keys())
@@ -38,8 +37,10 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
         if 'days_count' in self.body:
             if self.body['days_count'] not in Loan.count_days_values and self.body['days_count'] != None:
-                raise XerenityError(message="Conteo de día debe ser {}".format(",".join(Loan.count_days_values)),
-                                    code=400)
+                raise XerenityError(
+                    message="Conteo de día debe ser uno de los siguientes {}".format(",".join(Loan.count_days_values)),
+                    code=400
+                )
         try:
             # 2024-01-01
             self.body['start_date'] = datetime.strptime(body['start_date'], '%Y-%m-%d')
@@ -119,7 +120,9 @@ class LoanCalculatorServer(XerenityFunctionServer):
                 value_date=value_date,
                 curve=curve,
                 tipo_de_cobro=self.loan.days_count,
-                periodicidad_tasa='MV'
+                periodicidad_tasa='MV',
+                grace_type=self.loan.grace_type,
+                grace_period=self.loan.grace_period
             )
 
             if type(payment) is pd.DataFrame:
