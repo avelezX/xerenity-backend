@@ -114,6 +114,9 @@ class Loan:
         # Tipo de cobro depende del banco que emite el credito. 
         # Periodicidad tasa "SV", "TV"o "MV"
 
+        if tipo_de_cobro is None:
+            tipo_de_cobro = 'por_dias_360'
+
         number_to_user = {'Anual': 1, 'Semestral': 0.5, 'Trimestral': 1 / 4, 'Bimensual': 1 / 6, 'Mensual': 1 / 12}
         periodicidad_tasa_number = {'SV': 0.5, 'TV': 1 / 4, 'MV': 1 / 12}
 

@@ -37,7 +37,7 @@ class LoanCalculatorServer(XerenityFunctionServer):
             raise XerenityError(message="Periodicity must be {}".format(",".join(Loan.number_to_user.keys())), code=400)
 
         if 'days_count' in self.body:
-            if self.body['days_count'] not in Loan.count_days_values:
+            if self.body['days_count'] not in Loan.count_days_values and self.body['days_count'] != None:
                 raise XerenityError(message="Conteo de día debe ser {}".format(",".join(Loan.count_days_values)),
                                     code=400)
         try:
