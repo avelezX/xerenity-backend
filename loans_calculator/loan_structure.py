@@ -200,13 +200,21 @@ class Loan:
                     # Assign the corresponding 'tasa' value to the result DataFrame
                     closest_value = tasas.at[closest_date, 'valor']
                     result_df.at[i, 'rate'] = closest_value
-                    result_df.at[i, 'rate_tot'] = result_df.at[i, 'rate'] + self.interest_rate
+                    if self.min_period_rate==None:
+                        result_df.at[i, 'rate_tot'] = result_df.at[i, 'rate'] + self.interest_rate
+                    else:
+                        result_df.at[i, 'rate_tot']=max(result_df.at[i, 'rate']+self.interest_rate,self.min_period_rate)
                 # date_list = [self.start_date_ql + ql.Period(i, ql.Months) for i in range(len(periods))]
                 else:
+                    
                     next_date = date + ql.Period(int(12 * periodicidad_tasa_number[periodicidad_tasa]), ql.Months)
                     result_df.at[i, 'rate'] = curve.forwardRate(date - moving_period, next_date - moving_period,
                                                                 ql.Actual360(), ql.Simple).rate() * 100
-                    result_df.at[i, 'rate_tot'] = result_df.at[i, 'rate'] + self.interest_rate
+                    if self.min_period_rate==None:
+                        result_df.at[i, 'rate_tot'] = result_df.at[i, 'rate'] + self.interest_rate
+                    else:
+                        result_df.at[i, 'rate_tot']=max(result_df.at[i, 'rate']+self.interest_rate,self.min_period_rate)
+                    
 
                 if tipo_de_cobro == 'por_dias_360':
                     # Calculate the actual number of days between the two dates
@@ -214,11 +222,8 @@ class Loan:
                     p_pagos = self.number_to_user[self.periodicity]
                     day_count = ql.Thirty360(ql.Thirty360.BondBasis)
                     actual_days = day_count.dayCount(date, date + ql.Period(int(12 * p_pagos), ql.Months))
-                    if self.min_period_rate==None:
-                        factor_cobro = actual_days * (result_df.at[i, 'rate'] + self.interest_rate) / 360
-                    else:
-                        rate_min=max(result_df.at[i, 'rate']+self.interest_rate,self.min_period_rate)
-                        factor_cobro=actual_days * (rate_min + self.interest_rate) / 360
+                    factor_cobro = actual_days * (result_df.at[i, 'rate_tot']) / 360
+
 
                 if tipo_de_cobro == 'por_dias_365':
                     # Calculate the actual number of days between the two dates
@@ -226,33 +231,20 @@ class Loan:
                     p_pagos = self.number_to_user[self.periodicity]
                     day_count = ql.ActualActual(ql.ActualActual.ISDA)
                     actual_days = day_count.dayCount(date, date + ql.Period(int(12 * p_pagos), ql.Months))
-                    if self.min_period_rate==None:
-                        factor_cobro = actual_days * (result_df.at[i, 'rate'] + self.interest_rate) / 365
-                    else:
-                        rate_min=max(result_df.at[i, 'rate']+self.interest_rate,self.min_period_rate)
-                        factor_cobro=actual_days * (rate_min + self.interest_rate) / 365
+                    
+                    factor_cobro = actual_days * (result_df.at[i, 'rate_tot'] + self.interest_rate) / 365
+
                     
                     
                 
                 if tipo_de_cobro == 'por_periodo':
-                    if self.min_period_rate ==None:
-                        tasa_en_periodo = periodicidad_tasa_number[periodicidad_tasa] * (result_df.at[i, 'rate'] + self.interest_rate)
-                        factor_cobro = actual_days * (result_df.at[i, 'rate'] + self.interest_rate) / 360
-                    else:
-                        rate_min=max(result_df.at[i, 'rate']+self.interest_rate,self.min_period_rate)
-                        factor_cobro=actual_days * (rate_min + self.interest_rate) / 360
-
-                    
-                    
-                    
-                    
-                    factor_cobro = tasa_en_periodo+periodicidad_tasa_number[periodicidad_tasa] / self.number_to_user[self.periodicity]
-                  
+                    tasa_en_periodo = periodicidad_tasa_number[periodicidad_tasa] * (
+                        result_df.at[i, 'rate_tot'] + self.interest_rate)
+                    factor_cobro = (1 + tasa_en_periodo) ** (
+                        periodicidad_tasa_number[periodicidad_tasa] / self.number_to_user[self.periodicity]) - 1
 
                 factor_cobro = factor_cobro / 100
-                # result_df.at[i,'factor_cobro']=factor_cobro
-                # Calculating interest payment
-                
+              
                 
                 
                 if i < self.grace_period_interest:
