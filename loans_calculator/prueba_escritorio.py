@@ -6,10 +6,11 @@ sys.path.append("/Users/andre/Documents/xerenity/pysdk")
 
 from db_call.db_call import get_last_banrep,get_ibr_cluster_table
 from loans_calculator.loan_structure import Loan
-from datetime import datetime
 
 
+
 from datetime import datetime
+from datetime import date
 import pandas as pd
 import QuantLib as ql
 from swap_functions.main import full_ibr_curve_creation
@@ -17,17 +18,18 @@ from utilities.colombia_calendar import calendar_colombia
 import json
 
 
-periodicity="Trimestral"
-interest_rate=9.53
-periodicity="Trimestral"
-number_of_payments=12
-datetime_date="2024-06-07"
+periodicity="Mensual"
+interest_rate=6
+periodicity="Mensual"
+number_of_payments=22
+datetime_date="2024-04-22"
 start_date=datetime.strptime(datetime_date, '%Y-%m-%d')
-original_balance=1000
+original_balance=2000*1000000
 rate_type='IBR'
-days_count='por_dias_365'
+days_count='por_dias_360'
 grace_type='capital'
-grace_period=0
+grace_period=12
+min_period_rate=14.5
 
 SV=get_last_banrep("Indicador Bancario de Referencia (IBR) 6 Meses, nominal",365*5).data
 initial_date='2024-06-06 00:00:00'
@@ -55,7 +57,9 @@ calc=Loan(interest_rate=interest_rate,
           days_count=days_count,
           grace_type=grace_type,
           grace_period=grace_period,
-          db_info=db_info)
+          db_info=db_info,
+          min_period_rate=14.5
+          )
 
 calc.rate_type = 'IBR'
 today = datetime.today().date()
@@ -87,7 +91,6 @@ curve_details.crear_curva(days_to_on=1)['info']
 
 payment = calc.generate_rates_ibr(
     value_date=value_date,
-    curve=curve,
-    tipo_de_cobro='por_dias_365')
+    curve=curve)
 
 payment.to_clipboard()
