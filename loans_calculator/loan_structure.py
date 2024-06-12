@@ -247,7 +247,7 @@ class Loan:
             if i < self.grace_period_principal:
                 result_df.at[i, 'ending_balance'] = result_df.loc[i, 'beginning_balance']
                 if i == (len(dates) - 1):
-                    print('xxxxxLastxxxxxx')
+                    pass
                 else:
                     result_df.loc[i + 1, 'beginning_balance'] = result_df.at[i, 'ending_balance']
             else:
@@ -255,7 +255,7 @@ class Loan:
                             self.original_balance / self.capital_payments)
                 result_df.at[i, 'principal'] = self.original_balance / self.capital_payments
                 if i == (len(dates) - 1):
-                    print('xxxxxLastxxxxxx')
+                    pass
                 else:
                     result_df.loc[i + 1, 'beginning_balance'] = result_df.at[i, 'ending_balance']
 
