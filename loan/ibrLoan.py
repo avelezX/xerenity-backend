@@ -5,11 +5,10 @@ from utilities.date_functions import ql_to_datetime
 
 
 class IbrLoan(Loan):
-    def generate_cash_flow(self, value_date=None, curve=None, uvr=None):
-        # Value date debe ser el dia actual, para que la curva IBR coincida con la valoracion
+    def generate_cash_flow(self, value_date=None, uvr=None):
+
         # Curve deberia ser una curva de IBR generada con la valoracion de la curva actual
-        # Tipo de cobro depende del banco que emite el credito.
-        # Periodicidad tasa "SV", "TV"o "MV"
+        curve = self.qlHelper.create_curve(db_info=self.db_info)
 
         periodicidad_tasa = self.periodicity_spanish
 
@@ -51,6 +50,9 @@ class IbrLoan(Loan):
         # Iterate through each date in your_date_list
         moving_period = ql.Period(int(12 * number_to_user[self.periodicity]), ql.Months)
         result_df.at[0, 'beginning_balance'] = self.original_balance
+
+        index_rows = ['date', 'beginning_balance', 'rate', 'rate_tot', 'payment', 'interest', 'principal',
+                      'ending_balance']
         for i, date in enumerate(dates):
             # Find the closest date in the 'tasas' DataFrame
             if ql_to_datetime(date - moving_period) <= value_date:
@@ -74,7 +76,7 @@ class IbrLoan(Loan):
                 else:
                     result_df.at[i, 'rate_tot'] = max(result_df.at[i, 'rate'] + self.interest_rate,
                                                       self.min_period_rate)
-
+            factor_cobro = 1
             if tipo_de_cobro == 'por_dias_360':
                 # Calculate the actual number of days between the two dates
                 # Usamos la periodicidad en pagos.
@@ -122,10 +124,7 @@ class IbrLoan(Loan):
                     result_df.loc[i + 1, 'beginning_balance'] = result_df.at[i, 'ending_balance']
 
             result_df.at[i, 'payment'] = result_df.loc[i, 'interest'] + result_df.loc[i, 'principal']
-            cf_table = result_df[
-                ['date', 'beginning_balance', 'rate', 'rate_tot', 'payment', 'interest', 'principal', 'ending_balance']]
-            # pago_intereses
-            # result_df = result_df.drop(result_df.index[-1])
-            cf_table['date'] = cf_table['date'].apply(ql_to_datetime)
 
-        return cf_table
+        result_df.loc[:, 'date'] = result_df['date'].apply(ql_to_datetime)
+
+        return result_df[index_rows].copy(deep=True)

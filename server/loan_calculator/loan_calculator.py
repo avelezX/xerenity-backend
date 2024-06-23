@@ -1,14 +1,10 @@
 from server.main_server import XerenityFunctionServer, XerenityError, responseHttpOk
 from datetime import datetime
 import pandas as pd
-import QuantLib as ql
-from swap_functions.main import full_ibr_curve_creation
-from utilities.colombia_calendar import calendar_colombia
 
 from loan.Loan import Loan
 from loan.ibrLoan import IbrLoan
 from loan.fixedRateLoan import FixedRateLoan
-from loan.helperFunctions import QlHelperFunctions
 
 
 class LoanCalculatorServer(XerenityFunctionServer):
@@ -102,13 +98,8 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
             value_date = datetime.strptime(value_date_db, '%Y-%m-%dT%H:%M:%S')
 
-            hQl = QlHelperFunctions()
-
-            curve = hQl.create_curve(db_info=loan.db_info)
-
             payment = loan.generate_cash_flow(
-                value_date=value_date,
-                curve=curve["objeto"]
+                value_date=value_date
             )
 
             if type(payment) is pd.DataFrame:

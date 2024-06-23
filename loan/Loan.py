@@ -1,6 +1,7 @@
-from utilities.date_functions import datetime_to_ql, ql_to_datetime
-import QuantLib as ql
+from utilities.date_functions import datetime_to_ql
 import pandas as pd
+
+from loan.helperFunctions import QlHelperFunctions
 
 
 class Loan:
@@ -52,6 +53,7 @@ class Loan:
         self.grace_period_principal = self.grace_period if self.grace_type in ['capital', 'ambos'] else 0
         self.capital_payments = self.number_of_payments - self.grace_period_principal
         self.min_period_rate = min_period_rate if min_period_rate is not None else 0
+        self.qlHelper = QlHelperFunctions()
 
     def calculate_custom_period_payment(self):
         """
@@ -74,5 +76,5 @@ class Loan:
 
         return self.original_balance / discount_factor
 
-    def generate_cash_flow(self, value_date=None, curve=None, uvr=None):
+    def generate_cash_flow(self, value_date=None, uvr=None):
         pass

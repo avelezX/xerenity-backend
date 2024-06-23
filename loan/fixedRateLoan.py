@@ -5,7 +5,7 @@ from utilities.date_functions import ql_to_datetime
 
 
 class FixedRateLoan(Loan):
-    def generate_cash_flow(self, value_date=None, curve=None, uvr=None):
+    def generate_cash_flow(self, value_date=None, uvr=None):
         """
         Generates a cash flow table for the loan.
 

@@ -76,4 +76,4 @@ class QlHelperFunctions:
             OIS_helpers.append(self.depo_helpers_ibr(db_info['ibr_6m'][0] / 100, 6, ql.Months))
             OIS_helpers.append(self.depo_helpers_ibr(db_info['ibr_12m'][0] / 100, 12, ql.Months))
 
-        return {"objeto": self.crear_objeto_curva_ibr(OIS_helpers), "info": OIS_helpers}
+        return self.crear_objeto_curva_ibr(OIS_helpers)
