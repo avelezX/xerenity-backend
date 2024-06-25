@@ -1,12 +1,10 @@
-import json
-
-from loans_calculator.loan_structure import Loan
 from server.main_server import XerenityFunctionServer, XerenityError, responseHttpOk
 from datetime import datetime
 import pandas as pd
-import QuantLib as ql
-from swap_functions.main import full_ibr_curve_creation
-from utilities.colombia_calendar import calendar_colombia
+
+from loan.Loan import Loan
+from loan.ibrLoan import IbrLoan
+from loan.fixedRateLoan import FixedRateLoan
 
 
 class LoanCalculatorServer(XerenityFunctionServer):
@@ -33,12 +31,14 @@ class LoanCalculatorServer(XerenityFunctionServer):
                 raise XerenityError(message="{} must be {}".format(key, 400), code=400)
 
         if not self.body['periodicity'] in Loan.number_to_user.keys():
-            raise XerenityError(message="Periodicity must be {}".format(",".join(Loan.number_to_user.keys())), code=400)
+            raise XerenityError(
+                message="Periodicity must be {}".format(",".join(Loan.number_to_user.keys())), code=400)
 
         if 'days_count' in self.body:
             if self.body['days_count'] not in Loan.count_days_values and self.body['days_count'] != None:
                 raise XerenityError(
-                    message="Conteo de día debe ser uno de los siguientes {}".format(",".join(Loan.count_days_values)),
+                    message="Conteo de día debe ser uno de los siguientes {}".format(
+                        ",".join(Loan.count_days_values)),
                     code=400
                 )
         try:
@@ -49,13 +49,13 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
             raise XerenityError(message=str(e), code=400)
 
-        self.loan = Loan(**self.body)
+        # self.loan = Loan(**self.body)
 
     def period_payment(self):
 
         try:
-
-            payment = self.loan.calculate_custom_period_payment()
+            loan = FixedRateLoan(**self.body)
+            payment = loan.generate_cash_flow()
 
             return responseHttpOk(body={"payment": str(payment)})
 
@@ -66,7 +66,8 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
         try:
 
-            payment = self.loan.generate_cash_flow_table()
+            loan = FixedRateLoan(**self.body)
+            payment = loan.generate_cash_flow()
 
             if type(payment) is pd.DataFrame:
 
@@ -89,25 +90,16 @@ class LoanCalculatorServer(XerenityFunctionServer):
         """
 
         try:
-            self.loan.rate_type = 'IBR'
+            loan = IbrLoan(**self.body)
 
-            value_date_db = self.loan.db_info['fecha'][0]
+            loan.rate_type = 'IBR'
+
+            value_date_db = loan.db_info['fecha'][0]
 
             value_date = datetime.strptime(value_date_db, '%Y-%m-%dT%H:%M:%S')
-            value_date_ql = ql.Date(value_date.day, value_date.month, value_date.year)
 
-            curve_details = full_ibr_curve_creation(
-                desired_date_valuation=value_date_ql,
-                calendar=calendar_colombia(),
-                day_to_avoid_fwd_ois=7,
-                db_info=self.loan.db_info
-            )
-
-            curve = curve_details.crear_curva(db_info=self.loan.db_info)
-
-            payment = self.loan.generate_rates_ibr(
-                value_date=value_date,
-                curve=curve["objeto"]
+            payment = loan.generate_cash_flow(
+                value_date=value_date
             )
 
             if type(payment) is pd.DataFrame:
@@ -119,5 +111,4 @@ class LoanCalculatorServer(XerenityFunctionServer):
             else:
                 return responseHttpOk(body={"cash_flow": str(payment)})
         except Exception as er:
-            print(er)
             raise XerenityError(message=str(er), code=400)
