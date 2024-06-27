@@ -64,7 +64,7 @@ def fwd_rates_generation(curve, start_date, inverval_tenor=3, interval_period='m
 
     first_date = calendar_colombia.advance(datetime_to_ql(start_date), 1, ql.Days)
 
-    for i in range(1, 365 * 5):
+    for i in range(2, 365 * 5):
         try:
             # Calculate the forward rate for the current step
             # i=1
@@ -87,4 +87,5 @@ def fwd_rates_generation(curve, start_date, inverval_tenor=3, interval_period='m
     df = pd.DataFrame(list(zip(dates, forward_rates)), columns=['Maturity Date', 'rate'])
     df['Maturity Date'] = df['Maturity Date'].apply(ql_to_datetime)
     df.set_index('Maturity Date', inplace=True)
+
     return df
