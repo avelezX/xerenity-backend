@@ -9,7 +9,6 @@ import pandas as pd
 
 from utilities.date_functions import add_months
 from src.xerenity.xty import Xerenity
-from inflation_query.Inflation_query import implied_inflation_calc
 import os
 import sys
 #sys.path.append("/Users/avelezxerenity/Documents/GitHub/pysdk")
@@ -23,7 +22,7 @@ xty = Xerenity(
 def calculo_serie_uvr(cpi_serie=None,uvr_db=None):
     uvr=uvr_db
     if cpi_serie is None:
-        cpi_serie = implied_inflation_calc()
+        print('no tiene informacion del indice inflacionario')
 
     indice = cpi_serie
     indice.index = pd.to_datetime(indice.index).date
