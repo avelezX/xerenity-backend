@@ -9,7 +9,7 @@ xty = Xerenity(
 )
 
 ibr_cashflow = xty.get_ibr_data(
-    loan_id="c5f0df1a-b69e-4367-9802-d665afcb844b",
+    loan_id="beb65020-e940-4995-9e1e-2f2208cdc638",
     filter_date="2024-08-23"
 )
 

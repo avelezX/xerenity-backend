@@ -28,3 +28,22 @@ def fit_nelson_siegel(x, y):
     def nelson_siegel_curve(t, beta0, beta1, beta2, tau):
         return beta0 + beta1 * ((1 - np.exp(-t / tau)) / (t / tau)) + beta2 * (((1 - np.exp(-t / tau)) / (t / tau)) - np.exp(-t / tau))
 
+
+
+# Function to calculate days using ql.Thirty360 (BondBasis)
+def days_30_360(start_date, end_date):
+    day_count = ql.Thirty360(ql.Thirty360.BondBasis)
+    return day_count.dayCount(ql.Date(start_date.day, start_date.month, start_date.year),
+                              ql.Date(end_date.day, end_date.month, end_date.year))
+
+# Function to calculate days using ql.ActualActual (ISDA)
+def days_actual_actual(start_date, end_date):
+    day_count = ql.ActualActual(ql.ActualActual.ISDA)
+    return day_count.dayCount(ql.Date(start_date.day, start_date.month, start_date.year),
+                              ql.Date(end_date.day, end_date.month, end_date.year))
+
+# Function to calculate days using ql.Actual365Fixed
+def days_actual_365_fixed(start_date, end_date):
+    day_count = ql.Actual365Fixed()
+    return day_count.dayCount(ql.Date(start_date.day, start_date.month, start_date.year),
+                              ql.Date(end_date.day, end_date.month, end_date.year))
