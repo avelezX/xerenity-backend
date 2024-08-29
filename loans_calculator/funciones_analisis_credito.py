@@ -1,0 +1,115 @@
+
+import sys
+sys.path.append("/Users/avelezxerenity/Documents/GitHub/pysdk")
+#sys.path.append("/Users/andre/Documents/xerenity/pysdk")
+import numpy as np
+import numpy_financial as npf
+
+from src.xerenity.xty import Xerenity
+from server.loan_calculator.loan_calculator import LoanCalculatorServer
+from utilities.date_functions import datetime_to_ql,ql_to_datetime
+import pandas as pd
+import QuantLib as ql
+from utilities.date_functions import days_30_360_ql,days_act_act_ql,days_act_365_ql
+
+###### 
+
+
+def calculate_days_from_value_date(df, value_date, convention):
+    """
+    Calculate the number of days between a value date and the previous and next payment dates using a specified day count convention.
+
+    Parameters:
+    - df (pd.DataFrame): DataFrame containing payment dates
+    - value_date (pd.Timestamp): The value date to compare against
+    - convention (str): Day count convention. One of '30/360', 'actual/actual', or 'actual/365'
+
+    Returns:
+    - dict: A dictionary with days between value_date and previous/next payment dates
+    """
+    # Ensure the 'date' column is datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Sort the DataFrame by date
+    df = df.sort_values(by='date')
+
+    # Convert value_date to pandas datetime
+    value_date = ql_to_datetime(value_date)
+    
+    # Find the previous and next payment dates
+    prev_payment = df[df['date'] < value_date].sort_values(by='date', ascending=False).head(1)
+    next_payment = df[df['date'] > value_date].sort_values(by='date').head(1)
+    
+    # Extract the dates
+    prev_payment_date = prev_payment['date'].iloc[0] if not prev_payment.empty else None
+    next_payment_date = next_payment['date'].iloc[0] if not next_payment.empty else None
+    prev_payment_interest = prev_payment['interest'].iloc[0] if not prev_payment.empty else None
+    next_payment_interest = next_payment['interest'].iloc[0] if not next_payment.empty else None
+    
+    
+    # Convert to QuantLib Dates
+    value_date_ql = datetime_to_ql(value_date)
+    prev_payment_date_ql = datetime_to_ql(prev_payment_date) if prev_payment_date is not None else None
+    next_payment_date_ql = datetime_to_ql(next_payment_date) if next_payment_date is not None else None
+
+    # Calculate days based on the specified convention
+    if convention == '30/360':
+        days_prev = days_30_360_ql(value_date_ql, prev_payment_date_ql) if prev_payment_date_ql else None
+        days_next = days_30_360_ql(value_date_ql, next_payment_date_ql) if next_payment_date_ql else None
+    elif convention == 'actual/actual':
+        days_prev = days_act_act_ql(value_date_ql, prev_payment_date_ql) if prev_payment_date_ql else None
+        days_next = days_act_act_ql(value_date_ql, next_payment_date_ql) if next_payment_date_ql else None
+    elif convention == 'actual/365':
+        days_prev = days_act_365_ql(value_date_ql, prev_payment_date_ql) if prev_payment_date_ql else None
+        days_next = days_act_365_ql(value_date_ql, next_payment_date_ql) if next_payment_date_ql else None
+    else:
+        raise ValueError("Unsupported convention. Choose '30/360', 'actual/actual', or 'actual/365'.")
+
+    return {
+        'previous_payment_date': prev_payment_date,
+        'days_to_previous': days_prev,
+        'next_payment_date': next_payment_date,
+        'days_to_next': days_next,
+        'next_interest_payment':next_payment_interest,
+        'accrued_interest':next_payment_interest*(-1*days_prev)/(days_next-days_prev)
+    }
+
+def create_cashflows_and_total_value(df, value_date,convention):
+    """
+    Create a DataFrame with only 'payment' and 'date' columns for payments after the value date,
+    and calculate the total value of payments.
+
+    Parameters:
+    - df (pd.DataFrame): DataFrame containing payment dates and payment values
+    - value_date (pd.Timestamp): The value date to filter against
+
+    Returns:
+    - cashflows (pd.DataFrame): DataFrame with 'payment' and 'date' columns
+    - total_value (float): Sum of all payment values in the filtered DataFrame
+    """
+    # Ensure the 'date' column is datetime
+    df['date'] = pd.to_datetime(df['date'])
+    
+    # Convert value_date to pandas datetime
+    value_date = ql_to_datetime(value_date)
+    
+    # Filter the DataFrame to include only rows with dates after the value date
+    filtered_df = df[df['date'] > value_date]
+    
+    # Create the cashflows DataFrame with 'payment' and 'date' columns
+    cashflows = filtered_df[['date', 'payment']].copy()
+    
+    # Calculate the total value of payments
+    total_value = filtered_df['principal'].sum()
+    #total_value=total_value-calculate_days_from_value_date(df, datetime_to_ql(value_date), convention)['accrued_interest']
+    
+    # Add the value_date and total_value as the first row
+    total_row = pd.DataFrame({
+        'date': [value_date],
+        'payment': [-total_value]
+    })
+    # Concatenate the new row with the existing cashflows
+    cashflows = pd.concat([total_row, cashflows], ignore_index=True)
+    
+    return  cashflows
+    
