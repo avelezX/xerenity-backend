@@ -98,7 +98,6 @@ def cpi_implicit(request):
     except Exception as e:
         return responseHttpError(message=str(e), code=400)
 
-
 urlpatterns = [
     path("period_payment", period_payment, name="period_payment"),
     path("cash_flow", cash_flow, name="cash_flow"),
