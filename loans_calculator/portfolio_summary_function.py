@@ -21,6 +21,21 @@ class LoanPortfolioAnalyzer:
         self.all_loans_data = None
         self.results = {}
         self.bank_data = {}
+        self.loan_ids_list=None
+        self.total_value_sum=0
+        self.accrued_interest_sum=0
+        self.total_loan_count=0
+        self.not_calculated_loan_count = 0
+        self.total_value_fija_sum = 0
+        self.total_value_ibr_sum = 0
+        self.outdated_loan_count=0
+        self.weighted_irr_fija_sum = 0
+        self.weighted_irr_ibr_sum = 0
+        self.weighted_irr_sum = 0
+        self.weighted_duration_sum = 0
+        self.weighted_tenor_sum = 0
+        self.total_weighted_irr_sum=0
+        self.total_weighted_duration_sum=0
 
     def retrieve_data(self):
         self.all_loans_data = self.xty.get_all_loan_data(filter_date=self.filter_date)
@@ -49,18 +64,8 @@ class LoanPortfolioAnalyzer:
             }
 
     def aggregate_data(self):
-        total_value_sum = 0
-        accrued_interest_sum = 0
-        total_loan_count = 0
-        outdated_loan_count = 0
-        not_calculated_loan_count = 0
-        total_value_fija_sum = 0
-        total_value_ibr_sum = 0
-        weighted_irr_fija_sum = 0
-        weighted_irr_ibr_sum = 0
-        weighted_irr_sum = 0
-        weighted_duration_sum = 0
-        weighted_tenor_sum = 0
+
+
         loan_ids_list = []
 
         for loan_id, loan_info in self.results.items():
@@ -96,16 +101,44 @@ class LoanPortfolioAnalyzer:
             if pd.isna(total_value) or pd.isna(accrued_interest) or pd.isna(irr) or pd.isna(duration) or pd.isna(tenor):
                 print(f"Warning: Missing data detected in loan {loan_id}:")
                 print(f"total_value={total_value}, accrued_interest={accrued_interest}, irr={irr}, duration={duration}, tenor={tenor}, bank={bank}")
-                not_calculated_loan_count += 1
+                self.not_calculated_loan_count += 1
+                self.bank_data[bank] = {
+                    'total_value': 0,
+                    'weighted_irr_sum': 0,
+                    'accrued_interest': 0,
+                    'weighted_duration_sum': 0,
+                    'weighted_tenor_sum': 0,
+                    'loan_count': 0,
+                    'outdated_loan_count': 0,
+                    'total_value_fija': 0,
+                    'weighted_irr_fija_sum': 0,
+                    'total_value_ibr': 0,
+                    'weighted_irr_ibr_sum': 0,
+                    'loan_ids': []
+                }
                 continue
 
             if not (start_date < self.value_date_dt < last_payment):
-                outdated_loan_count += 1
+                self.outdated_loan_count += 1
+                self.bank_data[bank] = {
+                    'total_value': 0,
+                    'weighted_irr_sum': 0,
+                    'accrued_interest': 0,
+                    'weighted_duration_sum': 0,
+                    'weighted_tenor_sum': 0,
+                    'loan_count': 0,
+                    'outdated_loan_count': 0,
+                    'total_value_fija': 0,
+                    'weighted_irr_fija_sum': 0,
+                    'total_value_ibr': 0,
+                    'weighted_irr_ibr_sum': 0,
+                    'loan_ids': []
+                }
                 continue
 
-            total_value_sum += total_value
-            accrued_interest_sum += accrued_interest
-            total_loan_count += 1
+            self.total_value_sum += total_value
+            self.accrued_interest_sum += accrued_interest
+            self.total_loan_count += 1
 
             self.bank_data[bank]['total_value'] += total_value
             self.bank_data[bank]['weighted_irr_sum'] += irr * total_value
@@ -115,18 +148,17 @@ class LoanPortfolioAnalyzer:
             self.bank_data[bank]['loan_count'] += 1
 
             if loan_type == 'fija':
+                self.total_value_fija_sum =+ total_value
                 self.bank_data[bank]['total_value_fija'] += total_value
                 self.bank_data[bank]['weighted_irr_fija_sum'] += irr * total_value
             elif loan_type == 'ibr':
+                self.total_value_ibr_sum += total_value
                 self.bank_data[bank]['total_value_ibr'] += total_value
                 self.bank_data[bank]['weighted_irr_ibr_sum'] += irr * total_value
 
             self.bank_data[bank]['loan_ids'].append(loan_id)
-
-        self._calculate_weighted_averages(total_value_sum)
-
-    def _calculate_weighted_averages(self, total_value_sum):
-        for bank, data in self.bank_data.items():
+        
+        for bank,data in self.bank_data.items():
             data['average_irr'] = data['weighted_irr_sum'] / data['total_value'] if data['total_value'] > 0 else None
             data['average_duration'] = data['weighted_duration_sum'] / data['total_value'] if data['total_value'] > 0 else None
             data['average_tenor'] = data['weighted_tenor_sum'] / data['total_value'] if data['total_value'] > 0 else None
@@ -135,38 +167,53 @@ class LoanPortfolioAnalyzer:
             data['average_irr_ibr'] = (data['weighted_irr_ibr_sum'] / data['total_value_ibr']
                                        if data['total_value_ibr'] > 0 else None)
             data['loan_ids'] = json.dumps(data['loan_ids'])
+        self.loan_ids_list=data['loan_ids'] 
+        # self._calculate_weighted_averages(total_value_sum)
+        
+    def calculate_weighted_averages(self):
+
 
         bank_df = pd.DataFrame.from_dict(self.bank_data, orient='index')
 
-        total_value_fija_sum = bank_df['total_value_fija'].sum()
-        total_value_ibr_sum = bank_df['total_value_ibr'].sum()
-        weighted_irr_fija_sum = bank_df['weighted_irr_fija_sum'].sum()
-        weighted_irr_ibr_sum = bank_df['weighted_irr_ibr_sum'].sum()
-        total_weighted_irr_sum = bank_df['weighted_irr_sum'].sum()
-        total_weighted_duration_sum = bank_df['weighted_duration_sum'].sum()
-        total_weighted_tenor_sum = bank_df['weighted_tenor_sum'].sum()
+        
+        self.total_value_sum = bank_df['total_value_fija'].sum()
+        self.total_value_ibr_sum = bank_df['total_value_ibr'].sum()
+        
+        self.weighted_irr_fija_sum = bank_df['weighted_irr_fija_sum'].sum()
+        self.weighted_irr_ibr_sum = bank_df['weighted_irr_ibr_sum'].sum()
+        self.weighted_irr_sum = bank_df['weighted_irr_sum'].sum()
+        self.weighted_duration_sum = bank_df['weighted_duration_sum'].sum()
+        self.total_weighted_tenor_sum = bank_df['weighted_tenor_sum'].sum()
 
-        total_average_irr = (total_weighted_irr_sum / total_value_sum) if total_value_sum > 0 else None
-        total_average_duration = (total_weighted_duration_sum / total_value_sum) if total_value_sum > 0 else None
-        total_average_tenor = (total_weighted_tenor_sum / total_value_sum) if total_value_sum > 0 else None
-        total_average_irr_fija = (weighted_irr_fija_sum / total_value_fija_sum) if total_value_fija_sum > 0 else None
-        total_average_irr_ibr = (weighted_irr_ibr_sum / total_value_ibr_sum) if total_value_ibr_sum > 0 else None
+        self.total_average_irr = (self.total_weighted_irr_sum / self.total_value_sum) if self.total_value_sum > 0 else None
+        self.total_average_duration = (self.total_weighted_duration_sum / self.total_value_sum) if self.total_value_sum > 0 else None
+        self.total_average_tenor = (self.total_weighted_tenor_sum / self.total_value_sum) if self.total_value_sum > 0 else None
+        self.total_average_irr_fija = (self.weighted_irr_fija_sum / self.total_value_fija_sum) if self.total_value_fija_sum > 0 else None
+        self.total_average_irr_ibr = (self.weighted_irr_ibr_sum / self.total_value_ibr_sum) if self.total_value_ibr_sum > 0 else None
 
+        self.accrued_interest_sum=bank_df.bank_df['ac'].sum()
+        
+        
+
+    def get_final_dataframe(self):   
+            
+        
+        
         totals = pd.DataFrame({
-            'total_value': [total_value_sum],
-            'accrued_interest': [accrued_interest_sum],
-            'weighted_irr_sum': [total_weighted_irr_sum],
-            'average_irr': [total_average_irr],
-            'average_duration': [total_average_duration],
-            'average_tenor': [total_average_tenor],
-            'loan_count': [total_loan_count],
-            'outdated_loan_count': [outdated_loan_count],
-            'total_value_fija': [total_value_fija_sum],
-            'average_irr_fija': [total_average_irr_fija],
-            'total_value_ibr': [total_value_ibr_sum],
-            'average_irr_ibr': [total_average_irr_ibr],
-            'not_calculated_loan_count': [not_calculated_loan_count],
-            'loan_ids': [json.dumps(loan_ids_list)]
+            'total_value': [self.total_value_sum],
+            'accrued_interest': [self.accrued_interest_sum],
+            'weighted_irr_sum': [self.total_weighted_irr_sum],
+            'average_irr': [self.total_average_irr],
+            'average_duration': [self.total_average_duration],
+            'average_tenor': [self.total_average_tenor],
+            'loan_count': [self.total_loan_count],
+            'outdated_loan_count': [self.outdated_loan_count],
+            'total_value_fija': [self.total_value_fija_sum],
+            'average_irr_fija': [self.total_average_irr_fija],
+            'total_value_ibr': [self.total_value_ibr_sum],
+            'average_irr_ibr': [self.total_average_irr_ibr],
+            'not_calculated_loan_count': [self.not_calculated_loan_count],
+            'loan_ids': [json.dumps(self.loan_ids_list)]
         }, index=['Total'])
 
         self.final_df = pd.concat([bank_df, totals])
@@ -174,9 +221,7 @@ class LoanPortfolioAnalyzer:
                                        'outdated_loan_count', 'total_value_fija', 'average_irr_fija', 'total_value_ibr', 'average_irr_ibr',
                                        'not_calculated_loan_count', 'loan_ids']]
         self.final_df = self.final_df.sort_values(by='total_value', ascending=False)
-
-    def get_final_dataframe(self):
-        return self.final_df
+        
 
 # Example usage
 if __name__ == "__main__":
@@ -189,4 +234,4 @@ if __name__ == "__main__":
     analyzer.process_loans()
     analyzer.aggregate_data()
     final_df = analyzer.get_final_dataframe()
-    print(final_df)
+  
