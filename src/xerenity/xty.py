@@ -214,3 +214,15 @@ class Xerenity:
         return self.session.rpc('ibr_cash_flow_data_all', {
             "filter_date": filter_date
         }).execute().data
+
+    def get_loans_data(self, loans,filter_date):
+        return self.session.rpc('loan_get_data', {
+            "loans": loans,
+            "filter_date": filter_date
+        }).execute().data
+
+    def get_loan_analytics(self, loans,filter_date):
+        return self.session.rpc('ibr_cash_flow_by_loans', {
+            "loans": loans,
+            "filter_date": filter_date
+        }).execute().data
