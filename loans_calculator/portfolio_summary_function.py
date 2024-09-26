@@ -189,11 +189,14 @@ class LoanPortfolioAnalyzer:
             'loan_ids': [self.loan_ids_list]
         })
 
-        self.final_df = pd.concat([self.bank_df, totals])
-        self.final_df = self.final_df[
+        final_df = pd.concat([self.bank_df, totals])
+        final_df = final_df[
             ['total_value', 'accrued_interest', 'average_irr', 'average_duration', 'average_tenor', 'loan_count',
              'outdated_loan_count', 'total_value_fija', 'average_irr_fija', 'total_value_ibr', 'average_irr_ibr',
              'not_calculated_loan_count', 'loan_ids']]
-        self.final_df.fillna(value=0, inplace=True)
+        final_df.fillna(value=0, inplace=True)
 
-        return self.final_df.sort_values(by='total_value', ascending=False)
+        final_df = final_df.reset_index()
+        final_df.rename(columns={'index': 'bank'}, inplace=True)
+
+        return final_df.sort_values(by='total_value', ascending=False)
