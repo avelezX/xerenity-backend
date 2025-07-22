@@ -44,6 +44,12 @@ class LoanPortfolioAnalyzer:
         self.db_info = self.all_loans_data['db_info']
 
     def process_loans(self):
+
+        map_days_count = {
+            'por_dias_360': '30/360',
+            'por_dias_365': 'actual/365'
+        }
+
         for i, loan in enumerate(self.all_loans_data['loans']):
             try:
                 loan_temp = loan.copy()
@@ -55,7 +61,7 @@ class LoanPortfolioAnalyzer:
                     pd.DataFrame(loan_payments),
                     self.value_date,
                     datetime.strptime(loan['start_date'], '%Y-%m-%d'),
-                    {'por_dias_360': '30/360', 'por_dias_365': 'actual/365'}[loan['days_count']]
+                    map_days_count.get(loan['days_count'], '30/360')
                 )
 
                 loan_temp.pop('db_info', None)
