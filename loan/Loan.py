@@ -69,21 +69,26 @@ class Loan:
     def calculate_custom_period_payment(self):
         """
         Calculates the loan payment for a given periodicity.
-
-        Parameters:
-        - interest_rate (float): Annual interest rate as a percentage.
-        - num_payments (int): Total number of payments.
-        - original_balance (float): The loan amount.
-        - periodicity (int): Number of payments per year (e.g., 12 for monthly, 6 for bimonthly, 4 for quarterly, 1 for yearly).
-
-        Returns:
-        - float: The calculated loan payment.
+        Includes robust handling for very small interest rates.
         """
         annual_interest_rate = self.interest_rate / 100
         periodic_interest_rate = annual_interest_rate / (1 / self.number_to_user[self.periodicity])
 
-        discount_factor = ((1 + periodic_interest_rate) ** self.capital_payments - 1) / (
-                periodic_interest_rate * (1 + periodic_interest_rate) ** self.capital_payments)
+        print('---------')
+        print(self.interest_rate)
+        print(annual_interest_rate)
+        print(periodic_interest_rate)
+        print(self.capital_payments)
+
+        # Handle zero or very small interest rate case (tolerance for floating-point precision)
+        tolerance = 1e-10
+        if abs(periodic_interest_rate) < tolerance:
+            # With 0% interest, payment is simply principal divided by number of payments
+            discount_factor = self.capital_payments
+        else:
+            # Standard present value annuity factor formula
+            discount_factor = ((1 + periodic_interest_rate) ** self.capital_payments - 1) / (
+                    periodic_interest_rate * (1 + periodic_interest_rate) ** self.capital_payments)
 
         return self.original_balance / discount_factor
 
