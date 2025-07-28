@@ -73,7 +73,7 @@ class LoanCalculatorServer(XerenityFunctionServer):
         try:
 
             loan = FixedRateLoan(**self.body)
-            payment = loan.generate_cash_flow()
+            payment = loan.generate_cash_flow(uvr=False)
 
             if type(payment) is pd.DataFrame:
 
@@ -125,3 +125,42 @@ class LoanCalculatorServer(XerenityFunctionServer):
 
         except Exception as er:
             raise XerenityError(message=str(er), code=400)
+
+
+
+    def cash_flow_uvr(self):
+        """
+        Escribir como calcular el credito de un UV
+        """
+
+        loan = FixedRateLoan(**self.body)
+        payment = loan.generate_cash_flow(uvr=True)
+
+        if type(payment) is pd.DataFrame:
+
+            payment['date'] = payment['date'].apply(str)
+
+            return responseHttpOk(body=payment.to_dict(orient="records"))
+
+        else:
+            return responseHttpOk(body={"cash_flow": str(payment)})
+
+        """
+        try:
+
+            loan = FixedRateLoan(**self.body)
+            payment = loan.generate_cash_flow(uvr=True)
+
+            if type(payment) is pd.DataFrame:
+
+                payment['date'] = payment['date'].apply(str)
+
+                return responseHttpOk(body=payment.to_dict(orient="records"))
+
+            else:
+                return responseHttpOk(body={"cash_flow": str(payment)})
+
+        except Exception as er:
+
+            raise XerenityError(message=str(er), code=400)
+        """
