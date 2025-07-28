@@ -81,14 +81,16 @@ def uvr_rates(request):
     :return:
     """
 
+    calc = LoanCalculatorServer(json.loads(request.body))
+    return calc.cash_flow_uvr()
+    """
     try:
-        calc = LoanCalculatorServer(json.loads(request.body))
-        return calc.cash_flow_uvr()
+        
     except XerenityError as xerror:
         return responseHttpError(message=xerror.message, code=xerror.code)
     except Exception as e:
         return responseHttpError(message=str(e), code=400)
-
+    """
 
 def fwd_rates(request):
     try:
@@ -137,5 +139,6 @@ urlpatterns = [
     path("fwd_rates", fwd_rates, name="fwd_rates"),
     path("uvr_prints", uvr_prints, name="uvr_prints"),
     path("cpi_implicit", cpi_implicit, name="cpi_implicit"),
-    path("all_loans", all_loans, name="all_loans")
+    path("all_loans", all_loans, name="all_loans"),
+    path("uvr_rates", uvr_rates, name="uvr_rates"),
 ]
