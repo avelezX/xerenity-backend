@@ -80,17 +80,14 @@ def uvr_rates(request):
     :param request:
     :return:
     """
-
-    calc = LoanCalculatorServer(json.loads(request.body))
-    return calc.cash_flow_uvr()
-    """
     try:
-        
+        calc = LoanCalculatorServer(json.loads(request.body))
+        return calc.cash_flow_uvr()
     except XerenityError as xerror:
         return responseHttpError(message=xerror.message, code=xerror.code)
     except Exception as e:
         return responseHttpError(message=str(e), code=400)
-    """
+
 
 def fwd_rates(request):
     try:
