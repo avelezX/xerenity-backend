@@ -17,7 +17,7 @@ Including another URLconf
 
 import json
 from django.urls import path
-from server.main_server import XerenityError, responseHttpError
+from server.main_server import XerenityError, responseHttpError, responseHttpOk
 
 from server.loan_calculator.loan_calculator import LoanCalculatorServer
 from server.ibr_quotes_servefr.ibr_quotes_calculator import IbQuotesServer
@@ -129,6 +129,10 @@ def all_loans(request):
         return responseHttpError(message=str(e), code=400)
 
 
+def wake_up(request):
+    return responseHttpOk(body={"message": "Servidor de creditos activado"})
+
+
 urlpatterns = [
     path("period_payment", period_payment, name="period_payment"),
     path("cash_flow", cash_flow, name="cash_flow"),
@@ -138,4 +142,5 @@ urlpatterns = [
     path("cpi_implicit", cpi_implicit, name="cpi_implicit"),
     path("all_loans", all_loans, name="all_loans"),
     path("uvr_rates", uvr_rates, name="uvr_rates"),
+    path("wake_up", wake_up, name="wake_up")
 ]
