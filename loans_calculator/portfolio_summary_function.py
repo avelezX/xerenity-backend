@@ -200,7 +200,7 @@ class LoanPortfolioAnalyzer:
         self.total_average_irr_ibr = (
                 self.weighted_irr_ibr_sum / self.total_value_ibr_sum) if self.total_value_ibr_sum > 0 else None
         self.total_average_irr_uvr = (
-                self.weighted_irr_uvr_sum / self.total_value_uvr_sum) if self.total_value_ibr_sum > 0 else None
+                self.weighted_irr_uvr_sum / self.total_value_uvr_sum) if self.total_value_uvr_sum > 0 else None
 
         self.accrued_interest_sum = self.bank_df['accrued_interest'].sum()
 
