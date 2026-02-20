@@ -26,7 +26,7 @@ SECRET_KEY = 'django-insecure--8#+dz@00l=%w8)e6e)(c%zl&wx=zqkz0m!_@(s&b4@-ey6_vr
 DEBUG = True
 
 APP_NAME = os.environ.get("FLY_APP_NAME")
-ALLOWED_HOSTS = [f"{APP_NAME}.fly.dev", '127.0.0.1', 'localhost']
+ALLOWED_HOSTS = [f"{APP_NAME}.fly.dev", 'xerenity-pysdk.fly.dev', '127.0.0.1', 'localhost']
 
 # Application definition
 
