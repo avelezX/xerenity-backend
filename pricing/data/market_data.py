@@ -74,65 +74,38 @@ class MarketDataLoader:
 
     def fetch_ibr_quotes(self, target_date: str = None) -> dict:
         """
-        Fetch IBR swap quotes from ibr_swaps_cluster table.
+        Fetch IBR quotes from ibr_quotes_curve materialized view.
+        This view already consolidates BanRep deposits (1D-12M) and
+        swap rates (2Y-20Y) into a single row per date.
+
         Returns dict in the format expected by curve builders:
-        {ibr_3m: [rate], ibr_6m: [rate], ...} where rate is in percent.
-
-        Each tenor may arrive at a different execution_timestamp during the day,
-        so we fetch all records for the latest date and take the most recent
-        rate per tenor.
+        {ibr_1d: [rate], ibr_1m: [rate], ...} where rate is in percent.
         """
-        if target_date is None:
-            # Get latest timestamp to extract the date
-            latest_ts = self._latest_date("ibr_swaps_cluster", "execution_timestamp")
-            if latest_ts is None:
-                return {}
-            # Extract just the date part (YYYY-MM-DD)
-            target_date = latest_ts[:10]
+        tenor_cols = [
+            "ibr_1d", "ibr_1m", "ibr_3m", "ibr_6m", "ibr_12m",
+            "ibr_2y", "ibr_5y", "ibr_10y", "ibr_15y", "ibr_20y",
+        ]
+        select = ",".join(["fecha"] + tenor_cols)
 
-        # Fetch all records for the day, ordered by timestamp desc
-        data = self._get(
-            "ibr_swaps_cluster",
-            f"select=month_diff_effective_expiration,rate,execution_timestamp"
-            f"&execution_timestamp=gte.{target_date}T00:00:00"
-            f"&execution_timestamp=lt.{target_date}T23:59:59"
-            f"&order=execution_timestamp.desc",
-        )
+        if target_date is None:
+            data = self._get(
+                "ibr_quotes_curve",
+                f"select={select}&order=fecha.desc&limit=1",
+            )
+        else:
+            data = self._get(
+                "ibr_quotes_curve",
+                f"select={select}&fecha=eq.{target_date}&limit=1",
+            )
+
         if not data:
             return {}
 
-        # Take the latest rate per tenor (first occurrence since ordered desc)
-        latest_per_tenor = {}
-        for row in data:
-            months = row["month_diff_effective_expiration"]
-            if months not in latest_per_tenor and row["rate"] is not None:
-                latest_per_tenor[months] = row["rate"]
-
-        # Map month_diff_effective_expiration to tenor keys
-        tenor_map = {
-            0: "ibr_1d",
-            1: "ibr_1m",
-            3: "ibr_3m",
-            6: "ibr_6m",
-            9: "ibr_9m",
-            12: "ibr_12m",
-            24: "ibr_2y",
-            36: "ibr_3y",
-            42: "ibr_3_5y",
-            48: "ibr_4y",
-            60: "ibr_5y",
-            72: "ibr_6y",
-            84: "ibr_7y",
-            108: "ibr_9y",
-            120: "ibr_10y",
-            180: "ibr_15y",
-            240: "ibr_20y",
-        }
-
+        row = data[0]
         result = {}
-        for months, key in tenor_map.items():
-            if months in latest_per_tenor:
-                result[key] = [latest_per_tenor[months]]
+        for col in tenor_cols:
+            if row.get(col) is not None:
+                result[col] = [row[col]]
 
         return result
 
