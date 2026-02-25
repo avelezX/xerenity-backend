@@ -100,13 +100,15 @@ class MarketDataLoader:
         Returns dict: {ibr_1d: [rate], ibr_1m: [rate], ...} rates in percent.
         """
         result = {}
+        today = date.today().isoformat()
 
-        # Deposits from BanRep
+        # Deposits from BanRep (filter out future dates)
         for key, serie_id in self._BANREP_DEPOSITS.items():
             if target_date is None:
                 data = self._get(
                     "banrep_series_value_v2",
-                    f"select=valor&id_serie=eq.{serie_id}&order=fecha.desc&limit=1",
+                    f"select=valor&id_serie=eq.{serie_id}"
+                    f"&fecha=lte.{today}&order=fecha.desc&limit=1",
                 )
             else:
                 data = self._get(
@@ -116,12 +118,12 @@ class MarketDataLoader:
             if data and data[0].get("valor") is not None:
                 result[key] = [data[0]["valor"]]
 
-        # Swaps 2Y-10Y from accessible tables
+        # Swaps 2Y-10Y from accessible tables (filter out future dates)
         for key, table in self._SWAP_TABLES.items():
             if target_date is None:
                 data = self._get(
                     table,
-                    "select=close&order=day.desc&limit=1",
+                    f"select=close&day=lte.{today}&order=day.desc&limit=1",
                 )
             else:
                 data = self._get(
