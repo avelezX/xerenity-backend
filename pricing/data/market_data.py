@@ -72,40 +72,67 @@ class MarketDataLoader:
 
     # ── IBR Quotes ──
 
+    # BanRep deposit series IDs for IBR tenors
+    _BANREP_DEPOSITS = {
+        "ibr_1d": 9,
+        "ibr_1m": 11,
+        "ibr_3m": 13,
+        "ibr_6m": 15,
+        "ibr_12m": 17,
+    }
+
+    # Swap rate tables (each has day + close columns)
+    _SWAP_TABLES = {
+        "ibr_2y": "ibr_2y",
+        "ibr_5y": "ibr_5y",
+        "ibr_10y": "ibr_10y",
+        "ibr_15y": "ibr_15y",
+        "ibr_20y": "ibr_20y",
+    }
+
     def fetch_ibr_quotes(self, target_date: str = None) -> dict:
         """
-        Fetch IBR quotes from ibr_quotes_curve materialized view.
-        This view already consolidates BanRep deposits (1D-12M) and
-        swap rates (2Y-20Y) into a single row per date.
+        Fetch IBR curve quotes directly from source tables.
 
-        Returns dict in the format expected by curve builders:
-        {ibr_1d: [rate], ibr_1m: [rate], ...} where rate is in percent.
+        Deposits (1D-12M): from banrep_series_value_v2 (BanRep official rates).
+        Swaps (2Y-20Y): from individual ibr_Xy tables (market swap rates).
+
+        Queries the latest available value for each tenor, ensuring fresh data
+        without depending on the ibr_quotes_curve materialized view refresh.
+
+        Returns dict: {ibr_1d: [rate], ibr_1m: [rate], ...} rates in percent.
         """
-        tenor_cols = [
-            "ibr_1d", "ibr_1m", "ibr_3m", "ibr_6m", "ibr_12m",
-            "ibr_2y", "ibr_5y", "ibr_10y", "ibr_15y", "ibr_20y",
-        ]
-        select = ",".join(["fecha"] + tenor_cols)
-
-        if target_date is None:
-            data = self._get(
-                "ibr_quotes_curve",
-                f"select={select}&order=fecha.desc&limit=1",
-            )
-        else:
-            data = self._get(
-                "ibr_quotes_curve",
-                f"select={select}&fecha=eq.{target_date}&limit=1",
-            )
-
-        if not data:
-            return {}
-
-        row = data[0]
         result = {}
-        for col in tenor_cols:
-            if row.get(col) is not None:
-                result[col] = [row[col]]
+
+        # Deposits from BanRep
+        for key, serie_id in self._BANREP_DEPOSITS.items():
+            if target_date is None:
+                data = self._get(
+                    "banrep_series_value_v2",
+                    f"select=valor&id_serie=eq.{serie_id}&order=fecha.desc&limit=1",
+                )
+            else:
+                data = self._get(
+                    "banrep_series_value_v2",
+                    f"select=valor&id_serie=eq.{serie_id}&fecha=eq.{target_date}&limit=1",
+                )
+            if data and data[0].get("valor") is not None:
+                result[key] = [data[0]["valor"]]
+
+        # Swaps from individual tables
+        for key, table in self._SWAP_TABLES.items():
+            if target_date is None:
+                data = self._get(
+                    table,
+                    "select=close&order=day.desc&limit=1",
+                )
+            else:
+                data = self._get(
+                    table,
+                    f"select=close&day=eq.{target_date}&limit=1",
+                )
+            if data and data[0].get("close") is not None:
+                result[key] = [data[0]["close"]]
 
         return result
 
