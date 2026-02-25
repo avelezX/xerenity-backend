@@ -36,3 +36,4 @@ gunicorn
 djangorestframework
 scipy
 django-cors-headers
+requests
