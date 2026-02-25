@@ -5,9 +5,9 @@ An NDF settles in USD: at maturity, the difference between the contracted
 forward rate and the fixing rate (BanRep TRM) is exchanged in USD.
 
 The implied forward FX rate from interest rate parity is:
-  F(T) = Spot * DF_COP(T) / DF_USD(T)
+  F(T) = Spot * DF_USD(T) / DF_COP(T)
 
-NPV = Notional_USD * (Forward - Strike) * DF_USD(T_delivery)
+NPV_COP = Notional_USD * (Forward - Strike) * DF_COP(T_delivery)
 
 Supports both:
   - Implied forwards from IBR/SOFR curves (interest rate parity)
@@ -51,7 +51,7 @@ class NdfPricer:
         df_cop = self.cm.ibr_handle.discount(maturity_date)
         df_usd = self.cm.sofr_handle.discount(maturity_date)
 
-        return spot * df_cop / df_usd
+        return spot * df_usd / df_cop
 
     def forward_points(self, maturity_date: ql.Date, spot: float = None) -> float:
         """Calculate forward points (Forward - Spot) from interest rate parity."""
@@ -90,7 +90,7 @@ class NdfPricer:
         df_usd = self.cm.sofr_handle.discount(maturity_date)
         df_cop = self.cm.ibr_handle.discount(maturity_date)
 
-        npv_cop = sign * notional_usd * (forward - strike) * df_usd
+        npv_cop = sign * notional_usd * (forward - strike) * df_cop
         npv_usd = npv_cop / spot
         delta_cop = sign * notional_usd * df_cop
 
@@ -131,8 +131,9 @@ class NdfPricer:
         spot = spot or self.cm.fx_spot
         sign = 1.0 if direction == "buy" else -1.0
         df_usd = self.cm.sofr_handle.discount(maturity_date)
+        df_cop = self.cm.ibr_handle.discount(maturity_date)
 
-        npv_cop = sign * notional_usd * (market_forward - strike) * df_usd
+        npv_cop = sign * notional_usd * (market_forward - strike) * df_cop
         npv_usd = npv_cop / spot
 
         return {
@@ -142,6 +143,7 @@ class NdfPricer:
             "forward_points": market_forward - spot,
             "strike": strike,
             "df_usd": df_usd,
+            "df_cop": df_cop,
             "notional_usd": notional_usd,
             "direction": direction,
             "spot": spot,
