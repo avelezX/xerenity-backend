@@ -267,6 +267,15 @@ class XccySwapPricer:
         npv_cop = sign * (cop_total_pv - usd_total_pv * spot)
         npv_usd = npv_cop / spot
 
+        # P&L decomposition: FX effect vs Rate effect
+        # Rate P&L: NPV as if FX stayed at pactation level (isolates rate differential)
+        # FX P&L: additional gain/loss from FX movement
+        pnl_rate_cop = sign * (cop_total_pv - usd_total_pv * fx)
+        pnl_fx_cop = sign * usd_total_pv * (fx - spot)
+        # npv_cop = pnl_rate_cop + pnl_fx_cop (by construction)
+        pnl_rate_usd = pnl_rate_cop / spot
+        pnl_fx_usd = pnl_fx_cop / spot
+
         # Compute par xccy basis (skip during solver to prevent infinite recursion)
         if _compute_par_basis:
             try:
@@ -289,6 +298,10 @@ class XccySwapPricer:
         return {
             "npv_cop": round(npv_cop, 2),
             "npv_usd": round(npv_usd, 2),
+            "pnl_rate_cop": round(pnl_rate_cop, 2),
+            "pnl_rate_usd": round(pnl_rate_usd, 2),
+            "pnl_fx_cop": round(pnl_fx_cop, 2),
+            "pnl_fx_usd": round(pnl_fx_usd, 2),
             "usd_leg_pv": round(usd_interest_pv, 2),
             "cop_leg_pv": round(cop_interest_pv, 2),
             "usd_principal_pv": round(usd_principal_pv, 2),
@@ -308,6 +321,126 @@ class XccySwapPricer:
             "cashflows": cashflows,
         }
 
+    def _precompute_periods(
+        self,
+        notional_usd: float,
+        start_date,
+        maturity_date,
+        cop_spread_bps: float,
+        pay_usd: bool,
+        fx_initial: float,
+        payment_frequency: str,
+        amortization_type: str,
+        amortization_schedule: list,
+    ) -> dict:
+        """Pre-compute schedule data that doesn't change when USD spread varies."""
+        if isinstance(start_date, datetime):
+            start_date = datetime_to_ql(start_date)
+        if isinstance(maturity_date, datetime):
+            maturity_date = datetime_to_ql(maturity_date)
+
+        fx = fx_initial if fx_initial is not None else self.cm.fx_spot
+        notional_cop = notional_usd * fx
+        spot = self.cm.fx_spot
+        cop_spread = cop_spread_bps / 10000.0
+        day_counter = ql.Actual360()
+
+        freq = _FREQ_MAP.get(payment_frequency)
+        cop_cal = self.cm.ibr_index.fixingCalendar()
+        usd_cal = self.cm.sofr_index.fixingCalendar()
+        joint_cal = ql.JointCalendar(cop_cal, usd_cal)
+
+        schedule = ql.Schedule(
+            start_date, maturity_date, freq, joint_cal,
+            ql.ModifiedFollowing, ql.ModifiedFollowing,
+            ql.DateGeneration.Forward, False,
+        )
+        dates = list(schedule)
+        n_periods = len(dates) - 1
+        remaining, amort_pcts = _build_amortization_schedule(
+            n_periods, amortization_type, amortization_schedule
+        )
+
+        sofr_ref = self.cm.sofr_handle.referenceDate()
+        ibr_ref = self.cm.ibr_handle.referenceDate()
+        curve_ref = max(sofr_ref, ibr_ref)
+        sign = 1.0 if pay_usd else -1.0
+
+        # Pre-compute per-period invariants
+        periods = []
+        cop_interest_pv = 0.0
+        cop_principal_pv = 0.0
+        usd_principal_pv = 0.0
+
+        for i in range(n_periods):
+            period_start = dates[i]
+            period_end = dates[i + 1]
+            not_usd_i = notional_usd * remaining[i]
+            not_cop_i = notional_cop * remaining[i]
+            period_is_past = period_end <= curve_ref
+
+            if period_is_past:
+                periods.append(None)
+                continue
+
+            fwd_start = max(period_start, curve_ref)
+            if fwd_start >= period_end:
+                usd_fwd = 0.0
+                cop_fwd = 0.0
+            else:
+                usd_fwd = self.cm.sofr_handle.forwardRate(
+                    fwd_start, period_end, day_counter, ql.Simple
+                ).rate()
+                cop_fwd = self.cm.ibr_handle.forwardRate(
+                    fwd_start, period_end, day_counter, ql.Simple
+                ).rate()
+
+            usd_df = self.cm.sofr_handle.discount(period_end)
+            cop_df = self.cm.ibr_handle.discount(period_end)
+            tau = day_counter.yearFraction(period_start, period_end)
+
+            # COP interest (invariant — doesn't depend on USD spread)
+            cop_interest = not_cop_i * (cop_fwd + cop_spread) * tau
+            cop_interest_pv += cop_interest * cop_df
+
+            # Principal PVs (invariant)
+            usd_principal = notional_usd * amort_pcts[i]
+            cop_principal = notional_cop * amort_pcts[i]
+            usd_principal_pv += usd_principal * usd_df
+            cop_principal_pv += cop_principal * cop_df
+
+            # Store what varies with USD spread
+            periods.append({
+                "not_usd_i": not_usd_i,
+                "usd_fwd": usd_fwd,
+                "tau": tau,
+                "usd_df": usd_df,
+            })
+
+        return {
+            "periods": periods,
+            "cop_interest_pv": cop_interest_pv,
+            "cop_principal_pv": cop_principal_pv,
+            "usd_principal_pv": usd_principal_pv,
+            "sign": sign,
+            "spot": spot,
+            "fx": fx,
+        }
+
+    def _fast_npv(self, precomputed: dict, usd_spread_bps: float) -> float:
+        """Compute NPV using pre-computed period data. Only varies USD spread."""
+        usd_spread = usd_spread_bps / 10000.0
+        usd_interest_pv = 0.0
+        for p in precomputed["periods"]:
+            if p is None:
+                continue
+            usd_interest = p["not_usd_i"] * (p["usd_fwd"] + usd_spread) * p["tau"]
+            usd_interest_pv += usd_interest * p["usd_df"]
+
+        usd_total_pv = usd_interest_pv + precomputed["usd_principal_pv"]
+        cop_total_pv = precomputed["cop_interest_pv"] + precomputed["cop_principal_pv"]
+        return precomputed["sign"] * (cop_total_pv - usd_total_pv * precomputed["spot"])
+
     def _par_xccy_basis_internal(
         self,
         notional_usd: float,
@@ -321,24 +454,12 @@ class XccySwapPricer:
         amortization_schedule: list = None,
     ) -> float:
         """Find the par xccy basis spread (bps) on the USD leg that makes NPV = 0."""
-
-        def objective(basis_bps):
-            result = self.price(
-                notional_usd=notional_usd,
-                start_date=start_date,
-                maturity_date=maturity_date,
-                usd_spread_bps=basis_bps,
-                cop_spread_bps=cop_spread_bps,
-                pay_usd=pay_usd,
-                fx_initial=fx_initial,
-                payment_frequency=payment_frequency,
-                amortization_type=amortization_type,
-                amortization_schedule=amortization_schedule,
-                _compute_par_basis=False,  # Prevent infinite recursion
-            )
-            return result["npv_cop"]
-
-        return brentq(objective, -5000, 5000, xtol=0.01)
+        pre = self._precompute_periods(
+            notional_usd, start_date, maturity_date,
+            cop_spread_bps, pay_usd, fx_initial,
+            payment_frequency, amortization_type, amortization_schedule,
+        )
+        return brentq(lambda bps: self._fast_npv(pre, bps), -500, 500, xtol=0.5)
 
     def par_xccy_basis(
         self,
