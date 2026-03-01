@@ -31,3 +31,4 @@ from pricing.instruments.ndf import NdfPricer
 from pricing.instruments.xccy_swap import XccySwapPricer
 from pricing.instruments.tes_bond import TesBondPricer
 from pricing.instruments.ibr_swap import IbrSwapPricer
+from pricing.portfolio import PortfolioEngine

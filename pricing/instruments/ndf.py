@@ -150,6 +150,148 @@ class NdfPricer:
             "maturity": ql_to_datetime(maturity_date),
         }
 
+    def pnl_inception(
+        self,
+        notional_usd: float,
+        strike: float,
+        maturity_date,
+        direction: str = "buy",
+        spot: float = None,
+        fx_inception: float = None,
+    ) -> dict:
+        """
+        P&L from inception decomposed into FX and rate components.
+
+        At trade inception the NDF was at-market (NPV=0). The current NPV
+        can be attributed to two orthogonal risk factors:
+
+          FX component:  reprice with current spot but inception-implied
+                         discount factors (i.e., only spot moved).
+          Rate component: reprice with inception spot but current discount
+                          factors (i.e., only curves moved).
+          Cross-gamma:   residual interaction term.
+
+        The inception forward is reconstructed from the strike (which was
+        the at-market forward at trade time).
+
+        Args:
+            notional_usd: USD notional
+            strike: Contracted forward rate (was at-market at inception)
+            maturity_date: Maturity date
+            direction: 'buy' or 'sell'
+            spot: Current spot (defaults to cm.fx_spot)
+            fx_inception: Spot FX at trade inception. If None, derived from
+                          strike and current curves as approximation.
+
+        Returns:
+            dict with npv_total, pnl_fx, pnl_rates, pnl_cross, forward_current
+        """
+        if isinstance(maturity_date, datetime):
+            maturity_date = datetime_to_ql(maturity_date)
+
+        spot_current = spot or self.cm.fx_spot
+        sign = 1.0 if direction == "buy" else -1.0
+
+        # Current market values
+        df_cop = self.cm.ibr_handle.discount(maturity_date)
+        df_usd = self.cm.sofr_handle.discount(maturity_date)
+        forward_current = spot_current * df_usd / df_cop
+
+        npv_total = sign * notional_usd * (forward_current - strike) * df_cop
+
+        # Inception FX: if not provided, approximate from strike
+        # At inception: strike = fx_inception * df_usd_inception / df_cop_inception
+        # We don't have inception curves, so use fx_inception if provided,
+        # otherwise approximate: fx_inception ~ strike * df_cop / df_usd
+        # (assumes curves haven't moved much — acceptable for decomposition)
+        if fx_inception is None:
+            fx_inception = strike * df_cop / df_usd
+
+        # FX-only scenario: spot moves to current, curves stay at inception
+        # At inception the forward was at-market so F_inception = strike
+        # If only spot moved: F_fx_only = spot_current * (strike / fx_inception)
+        # because the ratio df_usd/df_cop is unchanged
+        fwd_fx_only = spot_current * (strike / fx_inception)
+        npv_fx_only = sign * notional_usd * (fwd_fx_only - strike) * df_cop
+
+        # Rate-only scenario: curves move to current, spot stays at inception
+        fwd_rate_only = fx_inception * df_usd / df_cop
+        npv_rate_only = sign * notional_usd * (fwd_rate_only - strike) * df_cop
+
+        # Cross-gamma residual
+        pnl_cross = npv_total - npv_fx_only - npv_rate_only
+
+        return {
+            "npv_cop": npv_total,
+            "npv_usd": npv_total / spot_current,
+            "pnl_fx_cop": npv_fx_only,
+            "pnl_rates_cop": npv_rate_only,
+            "pnl_cross_cop": pnl_cross,
+            "forward_current": forward_current,
+            "forward_fx_only": fwd_fx_only,
+            "forward_rate_only": fwd_rate_only,
+            "strike": strike,
+            "spot_current": spot_current,
+            "fx_inception": fx_inception,
+            "df_cop": df_cop,
+            "df_usd": df_usd,
+            "direction": direction,
+            "notional_usd": notional_usd,
+            "maturity": ql_to_datetime(maturity_date),
+        }
+
+    def dv01(
+        self,
+        notional_usd: float,
+        strike: float,
+        maturity_date,
+        direction: str = "buy",
+        spot: float = None,
+        bump_bps: float = 1.0,
+    ) -> dict:
+        """
+        Compute DV01 (rate sensitivity) for an NDF position.
+
+        Bumps IBR and SOFR curves independently by bump_bps and measures
+        the NPV change. Returns DV01 per curve and total.
+
+        Args:
+            notional_usd: USD notional
+            strike: Contracted forward rate
+            maturity_date: Maturity date
+            direction: 'buy' or 'sell'
+            spot: Current spot
+            bump_bps: Bump size in basis points (default 1bp)
+
+        Returns:
+            dict with dv01_ibr, dv01_sofr, dv01_total (all in COP)
+        """
+        if isinstance(maturity_date, datetime):
+            maturity_date = datetime_to_ql(maturity_date)
+
+        base = self.price(notional_usd, strike, maturity_date, direction, spot)
+        base_npv = base["npv_cop"]
+
+        # IBR bump
+        self.cm.bump_ibr(bump_bps)
+        ibr_bumped = self.price(notional_usd, strike, maturity_date, direction, spot)
+        dv01_ibr = ibr_bumped["npv_cop"] - base_npv
+        self.cm.bump_ibr(-bump_bps)
+
+        # SOFR bump
+        self.cm.bump_sofr(bump_bps)
+        sofr_bumped = self.price(notional_usd, strike, maturity_date, direction, spot)
+        dv01_sofr = sofr_bumped["npv_cop"] - base_npv
+        self.cm.bump_sofr(-bump_bps)
+
+        return {
+            "dv01_ibr_cop": dv01_ibr,
+            "dv01_sofr_cop": dv01_sofr,
+            "dv01_total_cop": dv01_ibr + dv01_sofr,
+            "bump_bps": bump_bps,
+            "base_npv_cop": base_npv,
+        }
+
     def implied_curve(
         self, cop_fwd_df: pd.DataFrame, spot: float = None
     ) -> pd.DataFrame:
