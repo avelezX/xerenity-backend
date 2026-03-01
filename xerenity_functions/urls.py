@@ -25,9 +25,13 @@ from server.uvr_prints_server.uvr_prints_calculator import UVRPrintsServer
 from server.all_loans_server.all_loans_server import AllLoanServer
 from server.pricing_api.views import (
     pricing_build, pricing_status, pricing_bump, pricing_reset,
-    pricing_ndf, pricing_ndf_implied_curve,
+    pricing_ndf, pricing_ndf_implied_curve, pricing_ndf_pnl,
     pricing_ibr_swap, pricing_ibr_par_curve,
-    pricing_tes_bond, pricing_xccy_swap,
+    pricing_tes_bond, pricing_tes_catalog, pricing_tes_spread,
+    pricing_tes_carry, pricing_tes_portfolio,
+    pricing_xccy_swap, pricing_xccy_pnl,
+    pricing_amortization_validate,
+    pricing_portfolio_reprice,
 )
 
 
@@ -159,5 +163,13 @@ urlpatterns = [
     path("pricing/ibr-swap", pricing_ibr_swap, name="pricing_ibr_swap"),
     path("pricing/ibr/par-curve", pricing_ibr_par_curve, name="pricing_ibr_par_curve"),
     path("pricing/tes-bond", pricing_tes_bond, name="pricing_tes_bond"),
+    path("pricing/tes/catalog", pricing_tes_catalog, name="pricing_tes_catalog"),
+    path("pricing/tes-bond/spread", pricing_tes_spread, name="pricing_tes_spread"),
+    path("pricing/tes-bond/carry", pricing_tes_carry, name="pricing_tes_carry"),
+    path("pricing/tes-bond/portfolio", pricing_tes_portfolio, name="pricing_tes_portfolio"),
     path("pricing/xccy-swap", pricing_xccy_swap, name="pricing_xccy_swap"),
+    path("pricing/ndf/pnl", pricing_ndf_pnl, name="pricing_ndf_pnl"),
+    path("pricing/xccy-swap/pnl", pricing_xccy_pnl, name="pricing_xccy_pnl"),
+    path("pricing/amortization/validate", pricing_amortization_validate, name="pricing_amortization_validate"),
+    path("pricing/portfolio/reprice", pricing_portfolio_reprice, name="pricing_portfolio_reprice"),
 ]
