@@ -79,9 +79,16 @@ class XccySwapPricer:
         eval_date = ql.Settings.instance().evaluationDate
         is_midlife = start_date < eval_date
 
-        # For mid-life swaps, build schedule from evaluation_date to avoid
-        # QuantLib "negative time" errors when discounting past dates.
-        schedule_start = eval_date if is_midlife else start_date
+        # For mid-life swaps, build schedule from the latest curve reference
+        # date to avoid QuantLib "negative time" errors. SOFR settles T+2 so
+        # its reference date is typically eval_date + 2 business days, which
+        # is later than eval_date itself.
+        if is_midlife:
+            ibr_ref = self.cm.ibr_handle.currentLink().referenceDate()
+            sofr_ref = self.cm.sofr_handle.currentLink().referenceDate()
+            schedule_start = max(eval_date, ibr_ref, sofr_ref)
+        else:
+            schedule_start = start_date
         schedule = ql.Schedule(
             schedule_start, maturity_date,
             payment_frequency,
