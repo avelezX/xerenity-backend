@@ -7,14 +7,15 @@ Schedule: Daily at 14:00 UTC (NY Fed publishes ~8am ET)
 """
 
 import json
+import os
 import requests
 from datetime import date, timedelta
 from src.collectors.ny_fed import fetch_sofr, fetch_effr, fetch_obfr, fetch_sofr_averages
 
 # ── Supabase REST connection ──
-SUPABASE_URL = "https://tvpehjbqxpiswkqszwwv.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2cGVoamJxeHBpc3drcXN6d3d2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTY0NTEzODksImV4cCI6MjAxMjAyNzM4OX0.LZW0i9HU81lCdyjAdqjwwF4hkuSVtsJsSDQh7blzozw"
-COLLECTOR_BEARER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiAiY29sbGVjdG9yIiwiZXhwIjogMTg0NzI4ODUyMCwiaWF0IjogMTczNjk1NTc1MiwiaXNzIjogImh0dHBzOi8vdHZwZWhqYnF4cGlzd2txc3p3d3Yuc3VwYWJhc2UuY28iLCJlbWFpbCI6ICJzdmVsZXpzYWZmb25AZ21haWwuY29tIiwicm9sZSI6ICJjb2xsZWN0b3IifQ.5HX_n8SsXN4xPslndvyyYubdlDLFg2_uAUIwinEi-eU"
+SUPABASE_URL = os.getenv("XTY_URL")
+SUPABASE_KEY = os.getenv("XTY_TOKEN")
+COLLECTOR_BEARER = os.getenv("COLLECTOR_BEARER")
 
 TABLE = "us_reference_rates"
 
