@@ -5,7 +5,7 @@ Centralizes all market data queries using the same REST API pattern as the runne
 import os
 import requests
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 
 
 SUPABASE_URL = os.getenv("XTY_URL")
@@ -161,13 +161,46 @@ class MarketDataLoader:
 
     def fetch_usdcop_spot(self, target_date: str = None) -> float | None:
         """
-        Fetch latest USD/COP spot rate from cop_fwd_points (SN tenor mid).
+        Fetch latest USD/COP spot rate.
+
+        Primary source: currency_hour table (SET-ICAP intraday prices).
+          - Live: last trade of the day.
+          - Historical (target_date provided): last trade of that date.
+
+        Fallback: cop_fwd_points SN tenor mid (FXEmpire), used when
+        currency_hour has no data for the requested date (e.g. weekends,
+        dates before the SET-ICAP collector was live).
         """
+        value = self._fetch_usdcop_setfx(target_date)
+        if value is not None:
+            return value
+        return self._fetch_usdcop_fwd_points_sn(target_date)
+
+    def _fetch_usdcop_setfx(self, target_date: str = None) -> float | None:
+        """Fetch USD/COP from currency_hour (SET-ICAP). Returns None if no data."""
+        if target_date is None:
+            data = self._get(
+                "currency_hour",
+                "select=value&currency=eq.USD:COP&order=time.desc&limit=1",
+            )
+        else:
+            next_date = (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
+            data = self._get(
+                "currency_hour",
+                f"select=value&currency=eq.USD:COP"
+                f"&time=gte.{target_date}T00:00:00&time=lt.{next_date}T00:00:00"
+                f"&order=time.desc&limit=1",
+            )
+        if data and "value" in data[0]:
+            return float(data[0]["value"])
+        return None
+
+    def _fetch_usdcop_fwd_points_sn(self, target_date: str = None) -> float | None:
+        """Fallback: fetch USD/COP from cop_fwd_points SN tenor mid (FXEmpire)."""
         if target_date is None:
             target_date = self._latest_date("cop_fwd_points")
         if target_date is None:
             return None
-
         data = self._get(
             "cop_fwd_points",
             f"select=mid&fecha=eq.{target_date}&tenor=eq.SN&limit=1",
