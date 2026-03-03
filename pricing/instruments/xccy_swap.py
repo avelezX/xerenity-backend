@@ -250,28 +250,42 @@ class XccySwapPricer:
         )
 
         # Notional exchange PV
-        # For new swaps: initial exchange + all intermediate amortizations + final.
-        # For mid-life swaps: initial exchange already settled. We still need to price
-        # all FUTURE exchanges (intermediate amortizations + final). We use
-        # _notional_exchange_pv_amort with the reconstructed schedule, which includes
-        # a "start" exchange at schedule_start (~today+2d). That start exchange
-        # represents the notional already outstanding — for mid-life we subtract it
-        # back out (it was the initial exchange that happened at trade inception).
-        usd_notional_pv = self._notional_exchange_pv_amort(
-            schedule, usd_notionals, self.cm.sofr_handle
-        )
-        cop_notional_pv = self._notional_exchange_pv_amort(
-            schedule, cop_notionals, self.cm.ibr_handle
-        )
-        # COP receives notional at start, pays at end (opposite sign)
-        cop_notional_pv = -cop_notional_pv
-
+        # Formula: npv_cop = sign * (-usd_total * spot + cop_total)
+        # So: positive usd_notional_pv SUBTRACTS from NPV (bad for USD receiver).
+        #     negative cop_notional_pv SUBTRACTS from NPV (bad for COP receiver).
+        #
+        # New swap: includes initial exchange now (~today+2d) + all future returns.
+        # Mid-life: initial exchange already settled at trade inception. Only future
+        #   notional returns remain. For both legs, these are NEGATIVE in the formula:
+        #   - USD returns: we RECEIVE USD back → usd_notional_pv must be NEGATIVE
+        #     so that -(usd_notional_pv * spot) is positive (adds to NPV).
+        #   - COP returns: we PAY BACK COP → cop_notional_pv must be NEGATIVE
+        #     so it reduces cop_total (subtracts from NPV).
         if is_midlife:
-            # Remove the "initial exchange at schedule_start" since it already
-            # occurred at trade inception — only future flows matter.
             dates = list(schedule)
-            usd_notional_pv += usd_notionals[0] * self.cm.sofr_handle.discount(dates[0])
-            cop_notional_pv -= cop_notionals[0] * self.cm.ibr_handle.discount(dates[0])
+            n_periods = len(dates) - 1
+            usd_notional_pv = 0.0
+            cop_notional_pv = 0.0
+            # Intermediate amortization returns
+            for i in range(1, n_periods):
+                usd_amort = usd_notionals[i - 1] - usd_notionals[i]
+                cop_amort = cop_notionals[i - 1] - cop_notionals[i]
+                if abs(usd_amort) > 1e-2:
+                    usd_notional_pv -= usd_amort * self.cm.sofr_handle.discount(dates[i])
+                if abs(cop_amort) > 1e-2:
+                    cop_notional_pv -= cop_amort * self.cm.ibr_handle.discount(dates[i])
+            # Final notional exchange at maturity
+            usd_notional_pv -= usd_notionals[-1] * self.cm.sofr_handle.discount(dates[-1])
+            cop_notional_pv -= cop_notionals[-1] * self.cm.ibr_handle.discount(dates[-1])
+        else:
+            usd_notional_pv = self._notional_exchange_pv_amort(
+                schedule, usd_notionals, self.cm.sofr_handle
+            )
+            cop_notional_pv = self._notional_exchange_pv_amort(
+                schedule, cop_notionals, self.cm.ibr_handle
+            )
+            # COP receives notional at start, pays at end (opposite sign)
+            cop_notional_pv = -cop_notional_pv
 
         usd_total = usd_leg_value + usd_notional_pv
         cop_total = cop_leg_value + cop_notional_pv
