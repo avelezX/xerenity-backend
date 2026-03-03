@@ -209,6 +209,44 @@ class MarketDataLoader:
             return float(data[0]["mid"])
         return None
 
+    # ── Store Marks Snapshot ──
+
+    def store_marks(self, fecha: str, fx_spot: float, sofr_on: float,
+                    ibr: dict, sofr: dict, ndf: dict) -> bool:
+        """
+        Upsert a daily market marks snapshot into the market_marks table.
+
+        Args:
+            fecha:   ISO date string, e.g. '2026-03-03'
+            fx_spot: USD/COP spot rate (SET-ICAP)
+            sofr_on: SOFR overnight rate in %
+            ibr:     dict of IBR nodes, e.g. {'ibr_1d': 9.636, ...}
+            sofr:    dict of SOFR zero rates by tenor_months, e.g. {'1': 3.661, ...}
+            ndf:     dict of NDF forwards by tenor_months,
+                     e.g. {'1': {'fwd_pts_cop': 27.25, 'F_market': 3830.25, 'deval_ea': 8.95}}
+
+        Returns:
+            True if stored successfully.
+        """
+        import json
+        payload = {
+            "fecha":    fecha,
+            "fx_spot":  fx_spot,
+            "sofr_on":  sofr_on,
+            "ibr":      ibr,
+            "sofr":     sofr,
+            "ndf":      ndf,
+        }
+        resp = self.session.post(
+            f"{self.url}/rest/v1/market_marks",
+            headers={
+                "Prefer": "resolution=merge-duplicates",   # upsert on fecha PK
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        return True
+
     # ── US Reference Rates ──
 
     def fetch_sofr_spot(self, target_date: str = None) -> float | None:
