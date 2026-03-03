@@ -250,20 +250,28 @@ class XccySwapPricer:
         )
 
         # Notional exchange PV
-        # Mid-life: initial exchange already settled, only final re-exchange remains.
-        # New swap: full amortization schedule including intermediate exchanges.
+        # For new swaps: initial exchange + all intermediate amortizations + final.
+        # For mid-life swaps: initial exchange already settled. We still need to price
+        # all FUTURE exchanges (intermediate amortizations + final). We use
+        # _notional_exchange_pv_amort with the reconstructed schedule, which includes
+        # a "start" exchange at schedule_start (~today+2d). That start exchange
+        # represents the notional already outstanding — for mid-life we subtract it
+        # back out (it was the initial exchange that happened at trade inception).
+        usd_notional_pv = self._notional_exchange_pv_amort(
+            schedule, usd_notionals, self.cm.sofr_handle
+        )
+        cop_notional_pv = self._notional_exchange_pv_amort(
+            schedule, cop_notionals, self.cm.ibr_handle
+        )
+        # COP receives notional at start, pays at end (opposite sign)
+        cop_notional_pv = -cop_notional_pv
+
         if is_midlife:
-            usd_notional_pv = notional_usd * self.cm.sofr_handle.discount(maturity_date)
-            cop_notional_pv = -notional_cop * self.cm.ibr_handle.discount(maturity_date)
-        else:
-            usd_notional_pv = self._notional_exchange_pv_amort(
-                schedule, usd_notionals, self.cm.sofr_handle
-            )
-            cop_notional_pv = self._notional_exchange_pv_amort(
-                schedule, cop_notionals, self.cm.ibr_handle
-            )
-            # COP receives notional at start, pays at end (opposite sign)
-            cop_notional_pv = -cop_notional_pv
+            # Remove the "initial exchange at schedule_start" since it already
+            # occurred at trade inception — only future flows matter.
+            dates = list(schedule)
+            usd_notional_pv += usd_notionals[0] * self.cm.sofr_handle.discount(dates[0])
+            cop_notional_pv -= cop_notionals[0] * self.cm.ibr_handle.discount(dates[0])
 
         usd_total = usd_leg_value + usd_notional_pv
         cop_total = cop_leg_value + cop_notional_pv
