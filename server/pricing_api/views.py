@@ -707,15 +707,26 @@ def _price_xccy_full(xccy_pricer, pos: dict, cm, ibr_overnight: float, sofr_over
     carry_differential_bps = (ibr_overnight - sofr_overnight) * 10000
 
     # Par basis
+    # Only meaningful for NEW swaps (start_date >= today). For mid-life swaps
+    # the par basis under the fixed-FX notional structure encodes the full
+    # IBR-SOFR rate differential (~550 bps for 10% vs 4.5%), which is not
+    # comparable to the market XCCY basis (~-30 to -50 bps). Return null for
+    # mid-life positions to avoid displaying a misleading metric.
     try:
-        par_basis_bps = xccy_pricer.par_xccy_basis(
-            notional_usd=pos["notional_usd"],
-            start_date=_parse_date(pos["start_date"]),
-            maturity_date=_parse_date(pos["maturity_date"]),
-            fx_initial=pos.get("fx_initial"),
-            amortization_type=pos.get("amortization_type", "bullet"),
-            amortization_schedule=pos.get("amortization_schedule"),
-        )
+        eval_date_ql = ql.Settings.instance().evaluationDate
+        start_ql = _parse_date(pos["start_date"])
+        is_midlife_pos = start_ql < eval_date_ql
+        if is_midlife_pos:
+            par_basis_bps = None
+        else:
+            par_basis_bps = xccy_pricer.par_xccy_basis(
+                notional_usd=pos["notional_usd"],
+                start_date=_parse_date(pos["start_date"]),
+                maturity_date=_parse_date(pos["maturity_date"]),
+                fx_initial=pos.get("fx_initial"),
+                amortization_type=pos.get("amortization_type", "bullet"),
+                amortization_schedule=pos.get("amortization_schedule"),
+            )
     except Exception:
         par_basis_bps = None
 
