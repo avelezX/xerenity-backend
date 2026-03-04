@@ -176,30 +176,70 @@ class XccySwapPricer:
         amortization_schedule: list = None,
     ) -> dict:
         """
-        Price a cross-currency swap with optional amortization.
+        Price a USD/COP Cross-Currency Swap with optional amortization.
 
-        Structure: Pay USD SOFR + usd_spread / Receive COP IBR + xccy_basis
-                   (or reverse if pay_usd=False)
+        Structure (pay_usd=True, standard Bancolombia):
+            Golosinas/client  PAYS  USD leg: SOFR + usd_spread_bps
+            Bancolombia       PAYS  COP leg: IBR + xccy_basis_bps + cop_spread_bps
 
-        For Bancolombia CCS confirmations the spread is typically on the
-        SOFR leg (e.g., SOFR - 22bps).  Use usd_spread_bps=-22 and
-        xccy_basis_bps=0.
+        Spread convention (Bancolombia confirmations):
+            Spread on the USD leg  → usd_spread_bps=-22, xccy_basis_bps=0
+            Spread on the COP leg  → usd_spread_bps=0,   xccy_basis_bps=-22
+            Both legs flat        → usd_spread_bps=0,   xccy_basis_bps=0
+
+        Mid-life pricing:
+            When start_date < today, the initial notional exchange is treated as
+            already settled. Only future cashflows and notional returns are priced.
 
         Args:
-            notional_usd: USD notional amount
-            start_date: Swap start date (datetime or ql.Date)
-            maturity_date: Swap maturity date
-            xccy_basis_bps: Cross-currency basis spread in bps (added to COP leg)
-            pay_usd: If True, we pay USD and receive COP
-            fx_initial: FX rate at inception for notional exchange
-            cop_spread_bps: Additional spread on COP leg (bps)
-            usd_spread_bps: Spread on USD/SOFR leg (bps), e.g. -22 for SOFR-22bps
-            payment_frequency: Payment frequency for both legs
-            amortization_type: 'bullet' (default), 'linear', or 'custom'
-            amortization_schedule: For 'custom', list of notional factors per period
+            notional_usd (float): USD notional at inception. Must be > 0.
+            start_date (datetime | ql.Date): Trade start date (T+0 of the swap).
+            maturity_date (datetime | ql.Date): Final maturity date.
+            xccy_basis_bps (float): Spread added to the COP/IBR leg, in bps.
+                Positive = client receives more COP interest.
+            pay_usd (bool): True = client pays USD, receives COP (standard).
+                False = client receives USD, pays COP.
+            fx_initial (float | None): USD/COP FX rate used for the notional
+                exchange at inception. If None, uses current cm.fx_spot.
+            cop_spread_bps (float): Additional spread on COP leg, in bps.
+                Usually 0; use xccy_basis_bps for the basis.
+            usd_spread_bps (float): Spread on the SOFR/USD leg, in bps.
+                Use -22 for SOFR-22bps.
+            payment_frequency (ql.Period): Coupon frequency for both legs.
+                Typical values: ql.Period(1, ql.Months)  — monthly
+                                ql.Period(3, ql.Months)  — quarterly (default)
+                                ql.Period(6, ql.Months)  — semi-annual
+                                ql.Period(12, ql.Months) — annual
+            amortization_type (str): Notional amortization profile.
+                'bullet'  — no intermediate amortization (default)
+                'linear'  — equal notional step-downs each period
+                'custom'  — user-provided factors via amortization_schedule
+            amortization_schedule (list | None): Required when amortization_type
+                is 'custom'. List of notional factors (floats 0–1), one per period,
+                e.g. [1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125]
+                for 8 equal quarterly amortizations.
 
         Returns:
-            dict with NPV, leg values, par basis spread
+            dict with the following keys:
+                npv_cop (float): Net present value in COP from the client's perspective.
+                    Positive = swap has positive value for the client.
+                npv_usd (float): NPV converted to USD at current fx_spot.
+                usd_leg_pv (float): PV of future USD interest cashflows (USD).
+                cop_leg_pv (float): PV of future COP interest cashflows (COP).
+                usd_notional_exchange_pv (float): PV of net USD notional flows (USD).
+                    At inception: large negative (client pays USD upfront).
+                    Mid-life: PV of remaining amortization + final return.
+                cop_notional_exchange_pv (float): PV of net COP notional flows (COP).
+                usd_total (float): usd_leg_pv + usd_notional_exchange_pv (USD).
+                cop_total (float): cop_leg_pv + cop_notional_exchange_pv (COP).
+                notional_usd (float): Original USD notional.
+                notional_cop (float): Equivalent COP notional = notional_usd * fx_initial.
+                fx_initial (float): FX rate used for the notional exchange.
+                fx_spot (float): Current USD/COP spot rate used for NPV conversion.
+                xccy_basis_bps (float): Echo of the input parameter.
+                amortization_type (str): Echo of the input parameter.
+                start_date (datetime): Trade start date.
+                maturity_date (datetime): Trade maturity date.
         """
         if isinstance(start_date, datetime):
             start_date = datetime_to_ql(start_date)

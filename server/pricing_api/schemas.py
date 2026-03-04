@@ -1,6 +1,17 @@
 """Pydantic request/response models for pricing API."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional
+from datetime import datetime
+
+_VALID_AMORT_TYPES = {"bullet", "linear", "custom"}
+_VALID_FREQ_MONTHS = {1, 3, 6, 12}
+
+
+def _parse_date(s: str) -> datetime:
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"Date must be YYYY-MM-DD, got '{s}'")
 
 
 class BuildCurvesRequest(BaseModel):
@@ -57,17 +68,47 @@ class TesBondRequest(BaseModel):
 
 
 class XccySwapRequest(BaseModel):
-    notional_usd: float
-    start_date: str
-    maturity_date: str
-    xccy_basis_bps: float = 0.0
-    pay_usd: bool = True
-    fx_initial: Optional[float] = None
-    cop_spread_bps: float = 0.0
-    usd_spread_bps: float = 0.0
-    amortization_type: str = "bullet"
-    amortization_schedule: Optional[list] = None
-    payment_frequency_months: int = Field(3, description="Payment frequency in months: 1=monthly, 3=quarterly, 6=semi-annual, 12=annual")
+    notional_usd: float = Field(..., gt=0, description="USD notional amount. Must be positive.")
+    start_date: str = Field(..., description="Trade start date (YYYY-MM-DD).")
+    maturity_date: str = Field(..., description="Trade maturity date (YYYY-MM-DD). Must be after start_date.")
+    xccy_basis_bps: float = Field(0.0, description="Cross-currency basis spread on COP leg, in bps.")
+    pay_usd: bool = Field(True, description="True = client pays USD / receives COP (standard). False = reverse.")
+    fx_initial: Optional[float] = Field(None, gt=0, description="USD/COP FX rate at inception. Defaults to current spot.")
+    cop_spread_bps: float = Field(0.0, description="Additional spread on COP leg, in bps. Usually 0.")
+    usd_spread_bps: float = Field(0.0, description="Spread on USD/SOFR leg, in bps. Use -22 for SOFR-22bps.")
+    amortization_type: str = Field("bullet", description="'bullet', 'linear', or 'custom'.")
+    amortization_schedule: Optional[list] = Field(None, description="Required for amortization_type='custom'. List of notional factors (0–1) per period.")
+    payment_frequency_months: int = Field(3, description="Payment frequency in months: 1=monthly, 3=quarterly, 6=semi-annual, 12=annual.")
+
+    @field_validator("start_date", "maturity_date")
+    @classmethod
+    def validate_date_format(cls, v):
+        _parse_date(v)
+        return v
+
+    @field_validator("amortization_type")
+    @classmethod
+    def validate_amort_type(cls, v):
+        if v not in _VALID_AMORT_TYPES:
+            raise ValueError(f"amortization_type must be one of {_VALID_AMORT_TYPES}, got '{v}'")
+        return v
+
+    @field_validator("payment_frequency_months")
+    @classmethod
+    def validate_frequency(cls, v):
+        if v not in _VALID_FREQ_MONTHS:
+            raise ValueError(f"payment_frequency_months must be one of {sorted(_VALID_FREQ_MONTHS)}, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_dates_and_schedule(self):
+        start = _parse_date(self.start_date)
+        maturity = _parse_date(self.maturity_date)
+        if maturity <= start:
+            raise ValueError("maturity_date must be after start_date")
+        if self.amortization_type == "custom" and not self.amortization_schedule:
+            raise ValueError("amortization_schedule is required when amortization_type='custom'")
+        return self
 
 
 # ── Position schemas for reprice-portfolio ──
@@ -94,18 +135,48 @@ class IbrSwapPosition(BaseModel):
 
 
 class XccySwapPosition(BaseModel):
-    notional_usd: float
+    notional_usd: float = Field(..., gt=0)
     start_date: str
     maturity_date: str
     xccy_basis_bps: float = 0.0
     pay_usd: bool = True
-    fx_initial: Optional[float] = None
+    fx_initial: Optional[float] = Field(None, gt=0)
     cop_spread_bps: float = 0.0
     usd_spread_bps: float = 0.0
     amortization_type: str = "bullet"
     amortization_schedule: Optional[list] = None
     payment_frequency_months: int = Field(3, description="Payment frequency in months: 1=monthly, 3=quarterly, 6=semi-annual, 12=annual")
     position_id: Optional[str] = Field(None, description="Optional identifier for the position")
+
+    @field_validator("start_date", "maturity_date")
+    @classmethod
+    def validate_date_format(cls, v):
+        _parse_date(v)
+        return v
+
+    @field_validator("amortization_type")
+    @classmethod
+    def validate_amort_type(cls, v):
+        if v not in _VALID_AMORT_TYPES:
+            raise ValueError(f"amortization_type must be one of {_VALID_AMORT_TYPES}, got '{v}'")
+        return v
+
+    @field_validator("payment_frequency_months")
+    @classmethod
+    def validate_frequency(cls, v):
+        if v not in _VALID_FREQ_MONTHS:
+            raise ValueError(f"payment_frequency_months must be one of {sorted(_VALID_FREQ_MONTHS)}, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_dates_and_schedule(self):
+        start = _parse_date(self.start_date)
+        maturity = _parse_date(self.maturity_date)
+        if maturity <= start:
+            raise ValueError("maturity_date must be after start_date")
+        if self.amortization_type == "custom" and not self.amortization_schedule:
+            raise ValueError("amortization_schedule is required when amortization_type='custom'")
+        return self
 
 
 class RepricePortfolioRequest(BaseModel):
