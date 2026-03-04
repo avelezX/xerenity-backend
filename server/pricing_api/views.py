@@ -553,10 +553,21 @@ def _price_ndf_full(ndf_pricer, pos: dict, cm, ibr_overnight: float, sofr_overni
     fx_delta = sign * notional_usd * df_usd
     fx_exposure_usd = sign * notional_usd * df_usd
 
+    # Days open (from trade_date if available)
+    trade_date_str = pos.get("trade_date")
+    if trade_date_str:
+        trade_py = datetime.strptime(trade_date_str, "%Y-%m-%d").date()
+        days_open = max(0, (eval_py - trade_py).days)
+    else:
+        days_open = 0
+    accrued_cop = carry_cop_daily * days_open
+
     out = _serialize(result)
     out["days_to_maturity"] = days_to_maturity
     out["carry_cop_daily"] = round(carry_cop_daily, 2)
     out["carry_usd_daily"] = round(carry_usd_daily, 4)
+    out["days_open"] = days_open
+    out["accrued_cop"] = round(accrued_cop, 2)
     out["dv01_cop"] = round(dv01_cop, 2)
     out["dv01_usd"] = round(dv01_usd_curve, 2)
     out["dv01_total"] = round(dv01_cop + dv01_usd_curve, 2)
@@ -592,10 +603,23 @@ def _price_ibr_full(ibr_pricer, pos: dict, cm, ibr_overnight: float) -> dict:
     carry_period_diff_bps = (ibr_overnight - fixed_rate) * 10000 * sign_carry
     carry_period_cop = notional * (ibr_overnight - fixed_rate) * sign_carry
 
+    # Days open (from start_date if available)
+    start_date_str = pos.get("start_date")
+    if start_date_str:
+        eval_date_ql = ql.Settings.instance().evaluationDate
+        eval_py_ibr = date(eval_date_ql.year(), eval_date_ql.month(), eval_date_ql.dayOfMonth())
+        start_py_ibr = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        days_open = max(0, (eval_py_ibr - start_py_ibr).days)
+    else:
+        days_open = 0
+    accrued_carry_cop = carry_daily_cop * days_open
+
     out = _serialize(result)
     out["ibr_overnight_pct"] = round(ibr_overnight_pct, 4)
     out["carry_daily_cop"] = round(carry_daily_cop, 2)
     out["carry_daily_diff_bps"] = round(carry_daily_diff_bps, 2)
+    out["days_open"] = days_open
+    out["accrued_carry_cop"] = round(accrued_carry_cop, 2)
     out["ibr_fwd_period_pct"] = round(ibr_fwd_period_pct, 4)
     out["carry_period_cop"] = round(carry_period_cop, 2)
     out["carry_period_diff_bps"] = round(carry_period_diff_bps, 2)
@@ -603,17 +627,24 @@ def _price_ibr_full(ibr_pricer, pos: dict, cm, ibr_overnight: float) -> dict:
 
 
 def _xccy_cashflows(cm, schedule, usd_notionals: list, cop_notionals: list,
-                    cop_spread: float, usd_spread: float) -> list:
+                    cop_spread: float, usd_spread: float, eval_date_py=None) -> list:
     """Build per-period cashflow schedule for an XCCY swap."""
     day_counter = ql.Actual360()
     dates = list(schedule)
     cashflows = []
     initial_usd = usd_notionals[0] if usd_notionals else 1.0
     n_periods = len(dates) - 1
+    spot = cm.fx_spot or 1.0
+
+    if eval_date_py is None:
+        ql_eval = ql.Settings.instance().evaluationDate
+        eval_date_py = date(ql_eval.year(), ql_eval.month(), ql_eval.dayOfMonth())
 
     for i in range(1, len(dates)):
         start = dates[i - 1]
         end = dates[i]
+        start_py = date(start.year(), start.month(), start.dayOfMonth())
+        end_py = date(end.year(), end.month(), end.dayOfMonth())
         notional_usd_i = usd_notionals[i - 1] if i - 1 < len(usd_notionals) else 0.0
         notional_cop_i = cop_notionals[i - 1] if i - 1 < len(cop_notionals) else 0.0
         remaining_pct = notional_usd_i / initial_usd if initial_usd else 1.0
@@ -641,13 +672,29 @@ def _xccy_cashflows(cm, schedule, usd_notionals: list, cop_notionals: list,
 
         usd_df = cm.sofr_handle.discount(end)
         cop_df = cm.ibr_handle.discount(end)
-        net_cop = cop_interest - usd_interest * cm.fx_spot if cm.fx_spot else 0.0
+        net_cop = cop_interest - usd_interest * spot
+
+        # Period status and carry devengado
+        days_in_period = max(1, (end_py - start_py).days)
+        if end_py <= eval_date_py:
+            status = 'settled'
+            days_elapsed = days_in_period
+        elif start_py <= eval_date_py < end_py:
+            status = 'current'
+            days_elapsed = (eval_date_py - start_py).days
+        else:
+            status = 'future'
+            days_elapsed = 0
+
+        daily_carry_cop = net_cop / days_in_period
+        accrued_carry_cop = daily_carry_cop * days_elapsed
+        diff_bps = (cop_rate - usd_rate) * 10000
 
         cashflows.append({
             "period": i,
-            "start": _ql_date_to_str(start),
-            "end": _ql_date_to_str(end),
-            "payment_date": _ql_date_to_str(end),
+            "start": start_py.isoformat(),
+            "end": end_py.isoformat(),
+            "payment_date": end_py.isoformat(),
             "notional_usd": round(notional_usd_i, 2),
             "notional_cop": round(notional_cop_i, 2),
             "remaining_pct": round(remaining_pct, 4),
@@ -660,6 +707,12 @@ def _xccy_cashflows(cm, schedule, usd_notionals: list, cop_notionals: list,
             "usd_df": round(usd_df, 6),
             "cop_df": round(cop_df, 6),
             "net_cop": round(net_cop, 2),
+            "status": status,
+            "days_in_period": days_in_period,
+            "days_elapsed": days_elapsed,
+            "daily_carry_cop": round(daily_carry_cop, 2),
+            "accrued_carry_cop": round(accrued_carry_cop, 2),
+            "diff_bps": round(diff_bps, 2),
         })
     return cashflows
 
@@ -746,10 +799,13 @@ def _price_xccy_full(xccy_pricer, pos: dict, cm, ibr_overnight: float, sofr_over
     # Build cashflow schedule — always from original start_date so payment
     # dates and amortization factors match the pricer. For mid-life swaps,
     # filter out past periods for display but keep the full schedule structure.
+    carry_accrued_cop = 0.0
+    days_open = 0
     try:
         start_ql = _parse_date(pos["start_date"])
         mat_ql = _parse_date(pos["maturity_date"])
         eval_date = ql.Settings.instance().evaluationDate
+        eval_date_py = date(eval_date.year(), eval_date.month(), eval_date.dayOfMonth())
         is_midlife = start_ql < eval_date
         cop_cal = cm.ibr_index.fixingCalendar()
         usd_cal = cm.sofr_index.fixingCalendar()
@@ -789,10 +845,13 @@ def _price_xccy_full(xccy_pricer, pos: dict, cm, ibr_overnight: float, sofr_over
             # Build a filtered schedule for cashflow display
             future_schedule = ql.Schedule(future_dates, joint_cal,
                                           ql.Following)
-            cashflows = _xccy_cashflows(cm, future_schedule, future_usd, future_cop, cop_spread, usd_spread)
+            cashflows = _xccy_cashflows(cm, future_schedule, future_usd, future_cop, cop_spread, usd_spread, eval_date_py)
         else:
-            cashflows = _xccy_cashflows(cm, schedule, usd_notionals, cop_notionals, cop_spread, usd_spread)
+            cashflows = _xccy_cashflows(cm, schedule, usd_notionals, cop_notionals, cop_spread, usd_spread, eval_date_py)
         n_periods = len(cashflows)
+        carry_accrued_cop = sum(cf["accrued_carry_cop"] for cf in cashflows if cf.get("status") == "current")
+        start_py_pos = datetime.strptime(pos["start_date"], "%Y-%m-%d").date()
+        days_open = max(0, (eval_date_py - start_py_pos).days)
     except Exception:
         cashflows = []
         n_periods = 0
@@ -815,6 +874,8 @@ def _price_xccy_full(xccy_pricer, pos: dict, cm, ibr_overnight: float, sofr_over
     out["fx_delta"] = round(fx_delta, 2)
     out["fx_exposure_usd"] = round(fx_exposure_usd, 2)
     out["par_basis_bps"] = round(par_basis_bps, 4) if par_basis_bps is not None else None
+    out["carry_accrued_cop"] = round(carry_accrued_cop, 2)
+    out["days_open"] = days_open
     out["n_periods"] = n_periods
     out["cashflows"] = cashflows
     return out
