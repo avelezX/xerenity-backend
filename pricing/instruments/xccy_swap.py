@@ -306,6 +306,13 @@ class XccySwapPricer:
                     "amortization_type": amortization_type,
                     "start_date": ql_to_datetime(start_date),
                     "maturity_date": ql_to_datetime(maturity_date),
+                    # Tier 2 — expired swap
+                    "days_open": (ql_to_datetime(eval_date) - ql_to_datetime(start_date)).days,
+                    "periods_remaining": 0,
+                    "current_period": None,
+                    "carry_daily_cop": 0.0,
+                    "carry_accrued_cop": 0.0,
+                    "fx_delta_cop": 0.0,
                 }
             future_dates = list(full_dates[first_future:])
             future_usd = list(usd_notionals[first_future:])
@@ -382,6 +389,43 @@ class XccySwapPricer:
         npv_cop = sign * (-usd_total * spot + cop_total)
         npv_usd = npv_cop / spot
 
+        # ── Tier 2: carry and period metadata ────────────────────────────────
+        eval_dt   = ql_to_datetime(eval_date)
+        start_dt  = ql_to_datetime(start_date)
+        days_open = (eval_dt - start_dt).days
+
+        # Current accrual period — future_dates[0]/[1] work for both
+        # inception (= full_dates[0:2]) and mid-life (= full_dates[first_future:first_future+2])
+        cur_p_start  = future_dates[0]
+        cur_p_end    = future_dates[1]
+        cur_n_usd    = future_usd[0]
+        cur_n_cop    = future_cop[0]
+        days_elapsed = max(0, (eval_dt - ql_to_datetime(cur_p_start)).days)
+
+        # Forward rates for the current period (clip start to referenceDate)
+        sofr_ref_fwd = self.cm.sofr_handle.currentLink().referenceDate()
+        ibr_ref_fwd  = self.cm.ibr_handle.currentLink().referenceDate()
+        dc           = ql.Actual360()
+        sofr_p_start = cur_p_start if cur_p_start >= sofr_ref_fwd else sofr_ref_fwd
+        ibr_p_start  = cur_p_start if cur_p_start >= ibr_ref_fwd  else ibr_ref_fwd
+
+        ibr_fwd_rate  = self.cm.ibr_handle.forwardRate(
+            ibr_p_start, cur_p_end, dc, ql.Simple).rate()
+        sofr_fwd_rate = self.cm.sofr_handle.forwardRate(
+            sofr_p_start, cur_p_end, dc, ql.Simple).rate()
+
+        usd_spread_dec    = usd_spread_bps / 10_000.0
+        # total_cop_spread already computed above (xccy_basis + cop_spread)
+        carry_daily_cop   = sign * (
+            cur_n_cop * (ibr_fwd_rate + total_cop_spread)
+            - cur_n_usd * (sofr_fwd_rate + usd_spread_dec) * spot
+        ) / 360.0
+        carry_accrued_cop = carry_daily_cop * days_elapsed
+
+        # FX delta: d(npv_cop)/d(spot) = sign * (-usd_total)
+        fx_delta_cop      = sign * (-usd_total)
+        periods_remaining = len(future_dates) - 1
+
         return {
             "npv_cop": npv_cop,
             "npv_usd": npv_usd,
@@ -399,6 +443,22 @@ class XccySwapPricer:
             "amortization_type": amortization_type,
             "start_date": ql_to_datetime(start_date),
             "maturity_date": ql_to_datetime(maturity_date),
+            # Tier 2
+            "days_open": days_open,
+            "periods_remaining": periods_remaining,
+            "current_period": {
+                "start":           ql_to_datetime(cur_p_start).strftime("%Y-%m-%d"),
+                "end":             ql_to_datetime(cur_p_end).strftime("%Y-%m-%d"),
+                "days_elapsed":    days_elapsed,
+                "notional_usd":    cur_n_usd,
+                "notional_cop":    cur_n_cop,
+                "ibr_fwd_pct":     round(ibr_fwd_rate * 100, 6),
+                "sofr_fwd_pct":    round(sofr_fwd_rate * 100, 6),
+                "differential_bps": round((ibr_fwd_rate - sofr_fwd_rate) * 10_000, 2),
+            },
+            "carry_daily_cop":   carry_daily_cop,
+            "carry_accrued_cop": carry_accrued_cop,
+            "fx_delta_cop":      fx_delta_cop,
         }
 
     def _value_ois_leg(

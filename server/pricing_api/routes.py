@@ -24,6 +24,7 @@ from server.pricing_api.schemas import (
     IbrSwapRequest,
     TesBondRequest,
     XccySwapRequest,
+    XccySwapResponse,
     RepricePortfolioRequest,
 )
 
@@ -298,7 +299,7 @@ def price_tes_bond(req: TesBondRequest):
 # ── Cross-Currency Swap Endpoints ──
 
 
-@router.post("/xccy-swap")
+@router.post("/xccy-swap", response_model=XccySwapResponse)
 def price_xccy_swap(req: XccySwapRequest):
     """Price a USD/COP cross-currency swap."""
     _ensure_curves_built()
@@ -319,9 +320,10 @@ def price_xccy_swap(req: XccySwapRequest):
         payment_frequency=ql.Period(req.payment_frequency_months, ql.Months),
     )
 
+    # Convert top-level datetime objects to ISO strings for schema validation
     for key in ("start_date", "maturity_date"):
-        if key in result and hasattr(result[key], "isoformat"):
-            result[key] = result[key].isoformat()
+        if key in result and hasattr(result[key], "strftime"):
+            result[key] = result[key].strftime("%Y-%m-%d")
 
     return result
 

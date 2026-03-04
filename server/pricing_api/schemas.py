@@ -174,6 +174,105 @@ class TesBondRequest(BaseModel):
     )
 
 
+class CurrentPeriodInfo(BaseModel):
+    """Current accrual period details for an XCCY swap."""
+    start: str = Field(..., description="Period start date YYYY-MM-DD.")
+    end: str = Field(..., description="Period end date YYYY-MM-DD.")
+    days_elapsed: int = Field(..., description="Calendar days elapsed in this period.")
+    notional_usd: float = Field(..., description="Outstanding USD notional this period.")
+    notional_cop: float = Field(..., description="Outstanding COP notional this period.")
+    ibr_fwd_pct: float = Field(..., description="IBR forward rate for this period, in percent.")
+    sofr_fwd_pct: float = Field(..., description="SOFR forward rate for this period, in percent.")
+    differential_bps: float = Field(..., description="IBR − SOFR forward rate differential, in bps.")
+
+
+class XccySwapResponse(BaseModel):
+    """
+    Response contract for POST /pricing/xccy-swap.
+
+    ── Valuation ────────────────────────────────────────────────────────────
+    npv_cop             Net present value in COP from the client's perspective.
+                        Positive = gain for the client.
+                        npv_cop = sign × (−usd_total × fx_spot + cop_total)
+    npv_usd             NPV converted to USD = npv_cop / fx_spot.
+
+    ── Leg PVs ──────────────────────────────────────────────────────────────
+    usd_leg_pv          PV of future USD interest cashflows (USD).
+    cop_leg_pv          PV of future COP interest cashflows (COP).
+    usd_notional_exchange_pv  PV of USD notional flows (USD, gross outflows).
+    cop_notional_exchange_pv  PV of COP notional flows (COP, gross inflows).
+    usd_total           usd_leg_pv + usd_notional_exchange_pv (USD).
+    cop_total           cop_leg_pv + cop_notional_exchange_pv (COP).
+
+    ── Notionals & FX ───────────────────────────────────────────────────────
+    notional_usd        Original USD notional.
+    notional_cop        COP notional = notional_usd × fx_initial.
+    fx_initial          USD/COP rate used for the notional exchange at inception.
+    fx_spot             Current USD/COP spot rate used for NPV conversion.
+
+    ── Risk ─────────────────────────────────────────────────────────────────
+    fx_delta_cop        d(npv_cop)/d(fx_spot) = sign × (−usd_total).
+                        Approximate change in npv_cop for a 1 COP/USD move in spot.
+
+    ── Carry ────────────────────────────────────────────────────────────────
+    carry_daily_cop     Net daily carry in COP for the current accrual period.
+                        = sign × (N_cop × (IBR_fwd + cop_spread) − N_usd × (SOFR_fwd + usd_spread) × spot) / 360
+                        Positive = client earns positive carry (COP leg pays more than USD leg).
+    carry_accrued_cop   Accrued carry in COP for days elapsed in the current period.
+                        = carry_daily_cop × days_elapsed.
+
+    ── Period metadata ──────────────────────────────────────────────────────
+    days_open           Calendar days since trade inception (0 at inception).
+    periods_remaining   Number of coupon periods still open (including current).
+    current_period      Rates and notionals for the active accrual period.
+                        None when the swap has fully expired.
+
+    ── Trade inputs ─────────────────────────────────────────────────────────
+    xccy_basis_bps      Cross-currency basis spread on the COP leg.
+    amortization_type   'bullet', 'linear', or 'custom'.
+    start_date          Trade start date ISO string.
+    maturity_date       Trade maturity date ISO string.
+    """
+
+    # Valuation
+    npv_cop: float = Field(..., description="Net present value in COP.")
+    npv_usd: float = Field(..., description="Net present value in USD.")
+
+    # Leg PVs
+    usd_leg_pv: float = Field(..., description="PV of future USD interest cashflows (USD).")
+    cop_leg_pv: float = Field(..., description="PV of future COP interest cashflows (COP).")
+    usd_notional_exchange_pv: float = Field(..., description="PV of USD notional flows (USD, gross).")
+    cop_notional_exchange_pv: float = Field(..., description="PV of COP notional flows (COP, gross).")
+    usd_total: float = Field(..., description="usd_leg_pv + usd_notional_exchange_pv (USD).")
+    cop_total: float = Field(..., description="cop_leg_pv + cop_notional_exchange_pv (COP).")
+
+    # Notionals & FX
+    notional_usd: float = Field(..., description="Original USD notional.")
+    notional_cop: float = Field(..., description="COP notional at inception FX.")
+    fx_initial: float = Field(..., description="USD/COP FX rate at inception.")
+    fx_spot: float = Field(..., description="Current USD/COP spot rate.")
+
+    # Risk
+    fx_delta_cop: float = Field(..., description="d(npv_cop)/d(spot): npv_cop change per 1 COP/USD move.")
+
+    # Carry
+    carry_daily_cop: float = Field(..., description="Net daily carry in COP for the current accrual period.")
+    carry_accrued_cop: float = Field(..., description="Accrued carry in COP for days elapsed in the current period.")
+
+    # Period metadata
+    days_open: int = Field(..., description="Calendar days since inception (0 at inception).")
+    periods_remaining: int = Field(..., description="Coupon periods still open (including current).")
+    current_period: Optional[CurrentPeriodInfo] = Field(
+        None, description="Active accrual period rates and notionals. None when swap has expired."
+    )
+
+    # Trade inputs
+    xccy_basis_bps: float = Field(..., description="Cross-currency basis spread on COP leg, in bps.")
+    amortization_type: str = Field(..., description="'bullet', 'linear', or 'custom'.")
+    start_date: str = Field(..., description="Trade start date YYYY-MM-DD.")
+    maturity_date: str = Field(..., description="Trade maturity date YYYY-MM-DD.")
+
+
 class XccySwapRequest(BaseModel):
     notional_usd: float = Field(..., gt=0, description="USD notional amount. Must be positive.")
     start_date: str = Field(..., description="Trade start date (YYYY-MM-DD).")
