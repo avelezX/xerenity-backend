@@ -997,6 +997,7 @@ def pricing_portfolio_reprice(request):
                 "total_carry_usd": round(total_carry_cop / spot, 2),
                 "total_pnl_rate_cop": round(total_pnl_rate_cop, 2),
                 "total_pnl_fx_cop": round(total_pnl_fx_cop, 2),
+                "fx_spot": round(spot, 2),
             },
         })
 
