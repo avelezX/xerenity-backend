@@ -174,6 +174,69 @@ class TesBondRequest(BaseModel):
     )
 
 
+class PeriodCashflow(BaseModel):
+    """One row in the cashflow schedule of a USD/COP CCS."""
+    period_num: int = Field(..., description="0 = inception notional exchange, 1..N = coupon periods.")
+    date_start: str = Field(..., description="Period start date YYYY-MM-DD.")
+    date_end: str = Field(..., description="Payment date YYYY-MM-DD.")
+    notional_usd: float = Field(..., description="Outstanding USD notional during period.")
+    notional_cop: float = Field(..., description="Outstanding COP notional during period.")
+    usd_coupon: Optional[float] = Field(
+        None,
+        description="Estimated USD interest amount (unsigned). None for settled periods.",
+    )
+    cop_coupon: Optional[float] = Field(
+        None,
+        description="Estimated COP interest amount (unsigned). None for settled periods.",
+    )
+    usd_principal: float = Field(
+        ...,
+        description=(
+            "Net USD principal flow at date_end, client perspective. "
+            "Negative = pays (inception), positive = receives (amorts/maturity)."
+        ),
+    )
+    cop_principal: float = Field(
+        ...,
+        description=(
+            "Net COP principal flow at date_end, client perspective. "
+            "Positive = receives (inception), negative = pays (amorts/maturity)."
+        ),
+    )
+    usd_net: float = Field(..., description="Total net USD flow this period (coupon + principal).")
+    cop_net: float = Field(..., description="Total net COP flow this period (coupon + principal).")
+    ibr_fwd_pct: Optional[float] = Field(None, description="IBR forward rate % for this period. None for settled.")
+    sofr_fwd_pct: Optional[float] = Field(None, description="SOFR forward rate % for this period. None for settled.")
+    status: str = Field(..., description="'settled' (past), 'current' (active accrual), 'future'.")
+
+
+class XccyCashflowResponse(BaseModel):
+    """
+    Response for POST /pricing/xccy-swap/cashflows.
+
+    Full cashflow schedule from inception to maturity.
+    Period 0 = inception notional exchange. Periods 1..n_periods = coupons + amortizations.
+
+    Sign convention (pay_usd=True):
+        usd_net < 0  client pays USD  (coupons + inception notional)
+        usd_net > 0  client receives USD (amort returns + final)
+        cop_net > 0  client receives COP (coupons + inception notional)
+        cop_net < 0  client pays COP (amort returns + final)
+
+    Settled period coupons are None — realized compounded rates are not stored here.
+    """
+    notional_usd: float
+    notional_cop: float
+    fx_initial: float = Field(..., description="USD/COP rate at inception.")
+    fx_spot: float = Field(..., description="Current USD/COP spot (reference).")
+    start_date: str
+    maturity_date: str
+    amortization_type: str
+    pay_usd: bool
+    n_periods: int = Field(..., description="Number of coupon periods (excludes inception row).")
+    periods: List[PeriodCashflow] = Field(..., description="Period 0 (inception) + periods 1..N.")
+
+
 class CurrentPeriodInfo(BaseModel):
     """Current accrual period details for an XCCY swap."""
     start: str = Field(..., description="Period start date YYYY-MM-DD.")

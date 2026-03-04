@@ -647,6 +647,156 @@ class XccySwapPricer:
             "maturity_date": current["maturity_date"],
         }
 
+    def cashflows(
+        self,
+        notional_usd: float,
+        start_date,
+        maturity_date,
+        xccy_basis_bps: float = 0.0,
+        pay_usd: bool = True,
+        fx_initial: float = None,
+        cop_spread_bps: float = 0.0,
+        usd_spread_bps: float = 0.0,
+        payment_frequency: ql.Period = ql.Period(3, ql.Months),
+        amortization_type: str = "bullet",
+        amortization_schedule: list = None,
+    ) -> list:
+        """
+        Full cashflow schedule for a USD/COP Cross-Currency Swap.
+
+        Returns one dict per period (period 0 = inception notional exchange,
+        periods 1..N = coupon + amortization periods).
+
+        Convention (pay_usd=True):
+            usd_net  negative = client pays USD outflow
+            cop_net  positive = client receives COP inflow
+            status   'settled' (past), 'current' (active accrual), 'future'
+
+        For settled periods, forward rates and coupon amounts are None
+        (actual realized rates are not stored in the curve).
+        """
+        if isinstance(start_date, datetime):
+            start_date = datetime_to_ql(start_date)
+        if isinstance(maturity_date, datetime):
+            maturity_date = datetime_to_ql(maturity_date)
+
+        fx = fx_initial or self.cm.fx_spot
+        notional_cop = notional_usd * fx
+
+        cop_cal = self.cm.ibr_index.fixingCalendar()
+        usd_cal = self.cm.sofr_index.fixingCalendar()
+        joint_cal = ql.JointCalendar(cop_cal, usd_cal)
+        bdc = ql.Following
+        schedule = ql.Schedule(
+            start_date, maturity_date,
+            payment_frequency,
+            joint_cal, bdc, bdc,
+            ql.DateGeneration.Forward, False,
+        )
+
+        usd_notionals = build_amortization_schedule(
+            schedule, notional_usd, amortization_type, amortization_schedule
+        )
+        cop_notionals = [n * fx for n in usd_notionals]
+        dates = list(schedule)
+        n_periods = len(dates) - 1
+
+        eval_date   = ql.Settings.instance().evaluationDate
+        sofr_ref    = self.cm.sofr_handle.currentLink().referenceDate()
+        ibr_ref     = self.cm.ibr_handle.currentLink().referenceDate()
+        dc          = ql.Actual360()
+        usd_spd_dec = usd_spread_bps / 10_000.0
+        cop_spd_dec = (xccy_basis_bps + cop_spread_bps) / 10_000.0
+        sign        = 1.0 if pay_usd else -1.0
+
+        rows = []
+
+        # ── Period 0: inception notional exchange ────────────────────────────
+        t0     = dates[0]
+        t0_str = ql_to_datetime(t0).strftime("%Y-%m-%d")
+        rows.append({
+            "period_num":   0,
+            "date_start":   t0_str,
+            "date_end":     t0_str,
+            "notional_usd": notional_usd,
+            "notional_cop": notional_cop,
+            "usd_coupon":   None,
+            "cop_coupon":   None,
+            "usd_principal": round(-sign * notional_usd, 2),  # client pays USD
+            "cop_principal": round(+sign * notional_cop, 0),  # client receives COP
+            "usd_net":       round(-sign * notional_usd, 2),
+            "cop_net":       round(+sign * notional_cop, 0),
+            "ibr_fwd_pct":  None,
+            "sofr_fwd_pct": None,
+            "status":       "settled" if t0 <= eval_date else "future",
+        })
+
+        # ── Periods 1..N: coupons + amortization ─────────────────────────────
+        for i in range(1, n_periods + 1):
+            p_start = dates[i - 1]
+            p_end   = dates[i]
+            N_usd   = usd_notionals[i - 1]
+            N_cop   = cop_notionals[i - 1]
+
+            if p_end <= eval_date:
+                status = "settled"
+            elif p_start < eval_date:
+                status = "current"
+            else:
+                status = "future"
+
+            # Forward rates only for current/future periods (settled = not in curve)
+            if status != "settled" and p_end > sofr_ref and p_end > ibr_ref:
+                sofr_start = p_start if p_start >= sofr_ref else sofr_ref
+                ibr_start  = p_start if p_start >= ibr_ref  else ibr_ref
+                tau        = dc.yearFraction(p_start, p_end)
+                sofr_fwd   = self.cm.sofr_handle.forwardRate(
+                    sofr_start, p_end, dc, ql.Simple).rate()
+                ibr_fwd    = self.cm.ibr_handle.forwardRate(
+                    ibr_start, p_end, dc, ql.Simple).rate()
+                usd_coupon = round(N_usd * (sofr_fwd + usd_spd_dec) * tau, 2)
+                cop_coupon = round(N_cop * (ibr_fwd  + cop_spd_dec) * tau, 0)
+                ibr_pct    = round(ibr_fwd * 100, 4)
+                sofr_pct   = round(sofr_fwd * 100, 4)
+            else:
+                usd_coupon = sofr_fwd = sofr_pct = None
+                cop_coupon = ibr_fwd  = ibr_pct  = None
+
+            # Principal flows at period end (deterministic, always known)
+            if i < n_periods:
+                usd_amort = usd_notionals[i - 1] - usd_notionals[i]
+                cop_amort = cop_notionals[i - 1] - cop_notionals[i]
+            else:  # final: return remaining notional
+                usd_amort = usd_notionals[-1]
+                cop_amort = cop_notionals[-1]
+
+            # Client perspective (pay_usd=True: pays USD coupons, receives COP coupons)
+            # At amortizations: receives USD back (+), returns COP (-)
+            usd_principal = round(sign * usd_amort, 2)   # + = receive back
+            cop_principal = round(-sign * cop_amort, 0)  # - = return
+
+            usd_net = round((-sign * (usd_coupon or 0.0)) + usd_principal, 2)
+            cop_net = round((+sign * (cop_coupon or 0.0)) + cop_principal, 0)
+
+            rows.append({
+                "period_num":    i,
+                "date_start":    ql_to_datetime(p_start).strftime("%Y-%m-%d"),
+                "date_end":      ql_to_datetime(p_end).strftime("%Y-%m-%d"),
+                "notional_usd":  N_usd,
+                "notional_cop":  N_cop,
+                "usd_coupon":    usd_coupon,
+                "cop_coupon":    cop_coupon,
+                "usd_principal": usd_principal,
+                "cop_principal": cop_principal,
+                "usd_net":       usd_net,
+                "cop_net":       cop_net,
+                "ibr_fwd_pct":   ibr_pct,
+                "sofr_fwd_pct":  sofr_pct,
+                "status":        status,
+            })
+
+        return rows
+
     def par_xccy_basis(
         self,
         notional_usd: float,

@@ -25,6 +25,7 @@ from server.pricing_api.schemas import (
     TesBondRequest,
     XccySwapRequest,
     XccySwapResponse,
+    XccyCashflowResponse,
     RepricePortfolioRequest,
 )
 
@@ -326,6 +327,51 @@ def price_xccy_swap(req: XccySwapRequest):
             result[key] = result[key].strftime("%Y-%m-%d")
 
     return result
+
+
+@router.post("/xccy-swap/cashflows", response_model=XccyCashflowResponse)
+def xccy_swap_cashflows(req: XccySwapRequest):
+    """
+    Full cashflow schedule for a USD/COP cross-currency swap.
+
+    Returns one row per period:
+      - Period 0: inception notional exchange (pay USD / receive COP)
+      - Periods 1..N: quarterly coupons + amortization returns
+
+    Settled period coupon estimates are None (realized rates not stored).
+    All other fields (notionals, principal flows) are deterministic from trade terms.
+    """
+    _ensure_curves_built()
+    cm = _get_cm()
+    xccy = XccySwapPricer(cm)
+
+    fx = req.fx_initial or cm.fx_spot
+    periods = xccy.cashflows(
+        notional_usd=req.notional_usd,
+        start_date=_parse_date(req.start_date),
+        maturity_date=_parse_date(req.maturity_date),
+        xccy_basis_bps=req.xccy_basis_bps,
+        pay_usd=req.pay_usd,
+        fx_initial=req.fx_initial,
+        cop_spread_bps=req.cop_spread_bps,
+        usd_spread_bps=req.usd_spread_bps,
+        amortization_type=req.amortization_type,
+        amortization_schedule=req.amortization_schedule,
+        payment_frequency=ql.Period(req.payment_frequency_months, ql.Months),
+    )
+
+    return {
+        "notional_usd":      req.notional_usd,
+        "notional_cop":      req.notional_usd * fx,
+        "fx_initial":        fx,
+        "fx_spot":           cm.fx_spot,
+        "start_date":        req.start_date,
+        "maturity_date":     req.maturity_date,
+        "amortization_type": req.amortization_type,
+        "pay_usd":           req.pay_usd,
+        "n_periods":         len(periods) - 1,  # exclude inception row
+        "periods":           periods,
+    }
 
 
 # ── Portfolio Repricing Endpoint ──
