@@ -310,9 +310,6 @@ class XccySwapPricer:
             future_dates = list(full_dates[first_future:])
             future_usd = list(usd_notionals[first_future:])
             future_cop = list(cop_notionals[first_future:])
-            # Clip the start of the first remaining period to curve_floor
-            if future_dates[0] < curve_floor:
-                future_dates[0] = curve_floor
         else:
             future_dates = full_dates
             future_usd = usd_notionals
@@ -335,16 +332,13 @@ class XccySwapPricer:
             ql.Actual360(),
         )
 
-        # Notional exchange PV
-        # _notional_exchange_pv_amort returns from the payer's perspective:
-        #   negative = pay out (initial), positive = receive back (amort/final).
-        # For the NPV formula: npv = sign * (-usd_total * spot + cop_total)
-        #   Both legs must be negated so that:
-        #   - usd_notional_pv > 0 means net USD outflow (cost),
-        #     which subtracts via -usd_total * spot.
-        #   - cop_notional_pv > 0 means net COP inflow (benefit).
+        # Notional exchange PV — gross convention (same as notebook)
+        # usd_notional_pv = PV of all USD paid (outflows, positive)
+        # cop_notional_pv = PV of all COP received (inflows, positive)
+        # Formula: npv = sign * (-usd_total * spot + cop_total) works correctly when
+        # usd_total = coupons_paid + notional_paid and cop_total = coupons_received + notional_received.
         if is_midlife:
-            # Initial exchange already settled; only future returns remain.
+            # T0 exchange already settled; only future amortization flows remain.
             n_future = len(future_dates) - 1
             usd_notional_pv = 0.0
             cop_notional_pv = 0.0
@@ -352,21 +346,33 @@ class XccySwapPricer:
                 usd_amort = future_usd[i - 1] - future_usd[i]
                 cop_amort = future_cop[i - 1] - future_cop[i]
                 if abs(usd_amort) > 1e-2:
-                    usd_notional_pv -= usd_amort * self.cm.sofr_handle.discount(future_dates[i])
+                    usd_notional_pv += usd_amort * self.cm.sofr_handle.discount(future_dates[i])
                 if abs(cop_amort) > 1e-2:
-                    cop_notional_pv -= cop_amort * self.cm.ibr_handle.discount(future_dates[i])
+                    cop_notional_pv += cop_amort * self.cm.ibr_handle.discount(future_dates[i])
             # Final notional exchange at maturity
-            usd_notional_pv -= future_usd[-1] * self.cm.sofr_handle.discount(future_dates[-1])
-            cop_notional_pv -= future_cop[-1] * self.cm.ibr_handle.discount(future_dates[-1])
+            usd_notional_pv += future_usd[-1] * self.cm.sofr_handle.discount(future_dates[-1])
+            cop_notional_pv += future_cop[-1] * self.cm.ibr_handle.discount(future_dates[-1])
         else:
-            usd_notional_pv = self._notional_exchange_pv_amort(
-                schedule, usd_notionals, self.cm.sofr_handle
-            )
-            cop_notional_pv = self._notional_exchange_pv_amort(
-                schedule, cop_notionals, self.cm.ibr_handle
-            )
-            usd_notional_pv = -usd_notional_pv
-            cop_notional_pv = -cop_notional_pv
+            # Inception: T0 exchange + all future amortizations (gross outflows/inflows).
+            # SOFR T+2 fix: clip T0 date to curve referenceDate (discount(ref) = 1.0).
+            sofr_ref = self.cm.sofr_handle.currentLink().referenceDate()
+            ibr_ref  = self.cm.ibr_handle.currentLink().referenceDate()
+            t0 = full_dates[0]
+            sofr_t0 = sofr_ref if t0 < sofr_ref else t0
+            ibr_t0  = ibr_ref  if t0 < ibr_ref  else t0
+            usd_notional_pv = usd_notionals[0] * self.cm.sofr_handle.discount(sofr_t0)
+            cop_notional_pv = cop_notionals[0] * self.cm.ibr_handle.discount(ibr_t0)
+            n_periods = len(full_dates) - 1
+            for i in range(1, n_periods):
+                usd_amort = usd_notionals[i - 1] - usd_notionals[i]
+                cop_amort = cop_notionals[i - 1] - cop_notionals[i]
+                if abs(usd_amort) > 1e-2:
+                    usd_notional_pv += usd_amort * self.cm.sofr_handle.discount(full_dates[i])
+                if abs(cop_amort) > 1e-2:
+                    cop_notional_pv += cop_amort * self.cm.ibr_handle.discount(full_dates[i])
+            # Final notional exchange at maturity
+            usd_notional_pv += usd_notionals[-1] * self.cm.sofr_handle.discount(full_dates[-1])
+            cop_notional_pv += cop_notionals[-1] * self.cm.ibr_handle.discount(full_dates[-1])
 
         usd_total = usd_leg_value + usd_notional_pv
         cop_total = cop_leg_value + cop_notional_pv
@@ -414,9 +420,10 @@ class XccySwapPricer:
         Value a floating OIS leg from a list of period dates and notionals.
 
         For each period [dates[i-1], dates[i]]:
-          1. Compute forward rate from the curve
+          1. Compute forward rate from the curve (start clipped to referenceDate
+             to avoid negative-time errors for curves with settlement lag, e.g. SOFR T+2)
           2. Add the spread
-          3. Compute accrued amount using period notional
+          3. Compute accrued amount using period notional and ORIGINAL tau (not clipped)
           4. Discount to today
 
         Args:
@@ -426,14 +433,18 @@ class XccySwapPricer:
             spread: Spread over the floating rate (decimal)
             day_counter: Day count convention
         """
+        ref_date = discount_handle.referenceDate()
         pv = 0.0
         for i in range(1, len(dates)):
             start = dates[i - 1]
             end = dates[i]
             notional = notionals[i - 1]
 
+            # Clip start to referenceDate only for forward rate query.
+            # tau always uses the original period dates (preserves coupon accrual).
+            fwd_start = start if start >= ref_date else ref_date
             fwd_rate = discount_handle.forwardRate(
-                start, end, day_counter, ql.Simple
+                fwd_start, end, day_counter, ql.Simple
             ).rate()
 
             tau = day_counter.yearFraction(start, end)
