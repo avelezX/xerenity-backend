@@ -248,6 +248,27 @@ class MarketDataLoader:
         resp.raise_for_status()
         return True
 
+    def fetch_marks(self, target_date: str = None) -> dict | None:
+        """
+        Fetch daily market marks snapshot from market_marks table.
+
+        Args:
+            target_date: ISO date string. None = latest available.
+
+        Returns:
+            dict with keys: fecha, fx_spot, sofr_on, ibr, sofr, ndf
+            None if no data found.
+        """
+        if target_date is None:
+            target_date = self._latest_date("market_marks")
+        if target_date is None:
+            return None
+        data = self._get(
+            "market_marks",
+            f"select=fecha,fx_spot,sofr_on,ibr,sofr,ndf&fecha=eq.{target_date}&limit=1",
+        )
+        return data[0] if data else None
+
     # ── US Reference Rates ──
 
     def fetch_sofr_spot(self, target_date: str = None) -> Optional[float]:

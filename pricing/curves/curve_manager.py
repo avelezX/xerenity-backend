@@ -38,6 +38,7 @@ from utilities.date_functions import datetime_to_ql
 from pricing.curves.ibr_curve import build_ibr_curve, IBR_DETAILS
 from pricing.curves.sofr_curve import build_sofr_curve, sofr_quantlib_det
 from pricing.curves.tes_curve import build_tes_curve
+from pricing.curves.ndf_curve import build_ndf_curve
 
 
 class CurveManager:
@@ -59,11 +60,13 @@ class CurveManager:
         self.ibr_handle = ql.RelinkableYieldTermStructureHandle()
         self.sofr_handle = ql.RelinkableYieldTermStructureHandle()
         self.tes_handle = ql.RelinkableYieldTermStructureHandle()
+        self.ndf_handle = ql.RelinkableYieldTermStructureHandle()
 
         # Underlying curves
         self.ibr_curve = None
         self.sofr_curve = None
         self.tes_curve = None
+        self.ndf_curve = None
 
         # SimpleQuote dictionaries for node overrides
         self.ibr_quotes = {}    # {tenor_key: SimpleQuote}
@@ -95,6 +98,7 @@ class CurveManager:
         self._ibr_built_at = None
         self._sofr_built_at = None
         self._tes_built_at = None
+        self._ndf_built_at = None
 
     # ── Valuation Date ──
 
@@ -162,32 +166,81 @@ class CurveManager:
         self._tes_built_at = datetime.now()
         return self.tes_curve
 
-    def build_all(self, loader) -> dict:
+    def build_ndf_from_marks(self, ndf_marks: dict, spot: float) -> ql.YieldTermStructure:
+        """
+        Build NDF-implied COP discount curve from market_marks.ndf snapshot.
+
+        Converts the pre-computed marks dict to a DataFrame and calls build_ndf_curve().
+        The resulting curve captures the NDF market basis (convertibility risk, supply/demand)
+        that the IBR curve misses. Use this for NDF pricing; IBR remains for IBR swaps.
+
+        Args:
+            ndf_marks: dict from market_marks.ndf JSONB.
+                       Keys = tenor_months as str, values = {fwd_pts_cop, F_market, deval_ea}.
+                       e.g. {"1": {"fwd_pts_cop": 27.25, "F_market": 3830.25, ...}}
+            spot: USD/COP spot rate (from market_marks.fx_spot or cm.fx_spot)
+
+        Returns:
+            NDF-implied COP DiscountCurve (also linked to ndf_handle).
+        """
+        rows = [
+            {"tenor_months": int(k), "fwd_points": v["fwd_pts_cop"] * 10_000}
+            for k, v in ndf_marks.items()
+        ]
+        df = pd.DataFrame(rows).sort_values("tenor_months")
+        self.ndf_curve, _ = build_ndf_curve(df, spot, self.sofr_handle, self.valuation_date)
+        self.ndf_handle.linkTo(self.ndf_curve)
+        self._ndf_built_at = datetime.now()
+        return self.ndf_curve
+
+    def build_all(self, loader, target_date: str = None) -> dict:
         """
         Build all curves from a MarketDataLoader instance.
 
+        NDF curve priority:
+          1. market_marks.ndf (pre-computed, preferred)
+          2. cop_fwd_points raw (bootstrap on the fly, fallback)
+          3. None — NdfPricer falls back to ibr_handle
+
         Args:
             loader: MarketDataLoader instance
+            target_date: ISO date string for historical builds. None = latest.
 
         Returns:
             dict with build status per curve
         """
         results = {}
 
-        ibr_data = loader.fetch_ibr_quotes()
+        ibr_data = loader.fetch_ibr_quotes(target_date=target_date)
         if ibr_data:
             self.build_ibr_curve(ibr_data)
             results["ibr"] = "built"
 
-        sofr_data = loader.fetch_sofr_curve()
+        sofr_data = loader.fetch_sofr_curve(target_date=target_date)
         if not sofr_data.empty:
             self.build_sofr_curve(sofr_data)
             results["sofr"] = "built"
 
-        fx = loader.fetch_usdcop_spot()
+        fx = loader.fetch_usdcop_spot(target_date=target_date)
         if fx:
             self.set_fx_spot(fx)
             results["fx_spot"] = fx
+
+        # ── NDF curve: market_marks first, raw fallback ──
+        if self.fx_spot and self.sofr_curve is not None:
+            marks = loader.fetch_marks(target_date=target_date)
+            if marks and marks.get("ndf"):
+                self.build_ndf_from_marks(marks["ndf"], self.fx_spot)
+                results["ndf"] = "built_from_marks"
+            else:
+                cop_fwd = loader.fetch_cop_forwards(target_date=target_date)
+                if not cop_fwd.empty:
+                    self.ndf_curve, _ = build_ndf_curve(
+                        cop_fwd, self.fx_spot, self.sofr_handle, self.valuation_date
+                    )
+                    self.ndf_handle.linkTo(self.ndf_curve)
+                    self._ndf_built_at = datetime.now()
+                    results["ndf"] = "built_from_raw"
 
         return results
 
@@ -286,5 +339,9 @@ class CurveManager:
             "tes": {
                 "built": self.tes_curve is not None,
                 "timestamp": str(self._tes_built_at),
+            },
+            "ndf": {
+                "built": self.ndf_curve is not None,
+                "timestamp": str(self._ndf_built_at),
             },
         }

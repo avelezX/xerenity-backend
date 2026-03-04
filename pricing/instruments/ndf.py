@@ -32,10 +32,27 @@ class NdfPricer:
         self.calendar_usd = ql.UnitedStates(ql.UnitedStates.FederalReserve)
         self.joint_calendar = ql.JointCalendar(self.calendar_cop, self.calendar_usd)
 
+    @property
+    def _cop_handle(self):
+        """
+        COP discount handle for NDF pricing.
+
+        Returns cm.ndf_handle when the NDF market curve is built (preferred —
+        captures convertibility risk and market basis over interest rate parity).
+        Falls back to cm.ibr_handle when the NDF curve is not available.
+        """
+        if self.cm.ndf_curve is not None:
+            return self.cm.ndf_handle
+        return self.cm.ibr_handle
+
     def implied_forward(self, maturity_date: ql.Date, spot: float = None) -> float:
         """
         Calculate the implied forward FX rate from interest rate parity.
         F(T) = Spot * DF_USD(T) / DF_COP(T)
+
+        When cm.ndf_curve is available, DF_COP comes from the NDF market curve
+        (bootstrapped from cop_fwd_points / market_marks.ndf), capturing the
+        market basis. Otherwise falls back to the IBR curve.
 
         Args:
             maturity_date: QL date for the forward
@@ -48,7 +65,7 @@ class NdfPricer:
         if spot is None:
             raise ValueError("FX spot rate not set. Call cm.set_fx_spot() first.")
 
-        df_cop = self.cm.ibr_handle.discount(maturity_date)
+        df_cop = self._cop_handle.discount(maturity_date)
         df_usd = self.cm.sofr_handle.discount(maturity_date)
 
         return spot * df_usd / df_cop
@@ -107,7 +124,7 @@ class NdfPricer:
 
         forward = self.implied_forward(maturity_date, spot)
         df_usd = self.cm.sofr_handle.discount(maturity_date)
-        df_cop = self.cm.ibr_handle.discount(maturity_date)
+        df_cop = self._cop_handle.discount(maturity_date)
 
         npv_cop = sign * notional_usd * (forward - strike) * df_cop
         npv_usd = npv_cop / spot
@@ -144,7 +161,8 @@ class NdfPricer:
         Use this when you have a reliable market quote (e.g., from cop_fwd_points
         table) and want to avoid model dependency on IBR/SOFR curve calibration.
 
-        NPV is still discounted using the IBR COP discount factor:
+        NPV is still discounted using the COP discount factor (NDF market curve if
+        available, else IBR fallback):
             NPV_COP = sign * notional_usd * (market_forward - strike) * DF_COP(T)
 
         Args:
@@ -164,7 +182,8 @@ class NdfPricer:
                 forward_points (float): market_forward minus spot.
                 strike (float): Contracted forward rate.
                 df_usd (float): SOFR discount factor at maturity.
-                df_cop (float): IBR discount factor at maturity.
+                df_cop (float): COP discount factor at maturity (NDF market curve
+                    if available, else IBR).
                 delta_cop (float): FX delta in COP (sensitivity to a 1-unit spot move).
                     = sign * notional_usd * df_cop
                 notional_usd (float): USD notional.
@@ -178,7 +197,7 @@ class NdfPricer:
         spot = spot or self.cm.fx_spot
         sign = 1.0 if direction == "buy" else -1.0
         df_usd = self.cm.sofr_handle.discount(maturity_date)
-        df_cop = self.cm.ibr_handle.discount(maturity_date)
+        df_cop = self._cop_handle.discount(maturity_date)
 
         npv_cop = sign * notional_usd * (market_forward - strike) * df_cop
         npv_usd = npv_cop / spot
@@ -242,7 +261,7 @@ class NdfPricer:
         sign = 1.0 if direction == "buy" else -1.0
 
         # Current market values
-        df_cop = self.cm.ibr_handle.discount(maturity_date)
+        df_cop = self._cop_handle.discount(maturity_date)
         df_usd = self.cm.sofr_handle.discount(maturity_date)
         forward_current = spot_current * df_usd / df_cop
 
