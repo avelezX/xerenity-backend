@@ -82,14 +82,18 @@ def _build_helpers_with_quotes(db_info: dict) -> tuple[list, dict]:
         quotes[key] = sq
 
         if is_swap:
-            helper = ql.OISRateHelper(
-                ibr_quantlib_det["settlement_days"],
-                ql.Period(tenor, unit),
+            # NOTE: SwapRateHelper used intentionally for bootstrap stability.
+            # OISRateHelper with paymentFrequency=Quarterly causes segfaults in
+            # some QuantLib SWIG versions. The bootstrap result is numerically
+            # close; revisit when QuantLib version is confirmed.
+            helper = ql.SwapRateHelper(
                 handle,
+                ql.Period(tenor, unit),
+                ibr_quantlib_det["calendar"],
+                ql.Quarterly,
+                ibr_quantlib_det["bussiness_convention"],
+                ibr_quantlib_det["dayCounter"],
                 ibr_overnight_index,
-                paymentLag=0,
-                paymentConvention=ibr_quantlib_det["bussiness_convention"],
-                paymentFrequency=ql.Quarterly,
             )
         else:
             helper = ql.DepositRateHelper(
