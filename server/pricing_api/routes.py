@@ -4,6 +4,8 @@ FastAPI pricing endpoints.
 The CurveManager is created as a singleton at module level.
 It gets initialized on the first /pricing/curves/build call.
 """
+from __future__ import annotations
+
 import QuantLib as ql
 from datetime import datetime
 from fastapi import APIRouter, HTTPException

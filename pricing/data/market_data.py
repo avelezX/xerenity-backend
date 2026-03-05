@@ -2,6 +2,8 @@
 Market data loader for Supabase tables.
 Centralizes all market data queries using the same REST API pattern as the runners.
 """
+from __future__ import annotations
+
 import os
 import requests
 import pandas as pd
