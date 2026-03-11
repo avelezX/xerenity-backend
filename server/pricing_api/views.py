@@ -338,17 +338,28 @@ def _mark_status(row: dict) -> str:
 
 @csrf_exempt
 def pricing_marks(request):
-    """Return all market_marks rows normalized for display.
+    """Return market_marks rows normalized for display.
 
-    Each row includes:
-      fecha, status, fx_spot, sofr_on,
-      ibr: {ibr_1d, ibr_1m, ibr_3m, ibr_6m, ibr_12m},
-      sofr: {"1", "3", "12", "60", "120"},
-      ndf: {"1": {F_market, fwd_pts}, ...}
+    Optional query param ?fecha=YYYY-MM-DD returns a single row:
+      {"mark": {...} | null}
 
+    Without fecha, returns up to 120 rows most-recent first:
+      {"marks": [...], "count": N}
+
+    Each row: fecha, status, fx_spot, sofr_on, ibr (JSONB), sofr (JSONB), ndf (JSONB)
     status: 'complete' | 'partial' | 'missing'
     """
     loader = _get_loader()
+    fecha = request.GET.get("fecha")
+    if fecha:
+        data = loader._get(
+            "market_marks",
+            f"select=fecha,fx_spot,sofr_on,ibr,sofr,ndf&fecha=eq.{fecha}&limit=1",
+        )
+        row = data[0] if data else None
+        if row:
+            row["status"] = _mark_status(row)
+        return responseHttpOk({"mark": row})
     data = loader._get(
         "market_marks",
         "select=fecha,fx_spot,sofr_on,ibr,sofr,ndf&order=fecha.desc&limit=120",
