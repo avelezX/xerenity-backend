@@ -25,10 +25,11 @@ class MarketDataLoader:
     def __init__(self, supabase_url: str = None, supabase_key: str = None,
                  bearer_token: str = None):
         self.url = supabase_url or SUPABASE_URL
-        # Use XTY_TOKEN (anon publishable key) for both apikey and bearer.
-        # All market data tables have GRANT SELECT TO anon in xerenity schema.
+        # apikey: XTY_TOKEN (anon publishable key — identifies the project to Supabase)
+        # bearer: COLLECTOR_BEARER (collector role JWT — has SELECT on all xerenity
+        #         market data tables via grants + RLS policies).
         key = supabase_key or SUPABASE_KEY
-        bearer = bearer_token or key
+        bearer = bearer_token or COLLECTOR_BEARER or key
         self.session = requests.Session()
         self.session.headers.update({
             "apikey": key,
