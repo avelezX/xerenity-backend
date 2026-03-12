@@ -25,10 +25,15 @@ class MarketDataLoader:
     def __init__(self, supabase_url: str = None, supabase_key: str = None,
                  bearer_token: str = None):
         self.url = supabase_url or SUPABASE_URL
+        # Use XTY_TOKEN (anon publishable key) as both apikey and bearer.
+        # COLLECTOR_BEARER is a legacy custom-role JWT that lacks RLS policies
+        # on several tables (sofr_swap_curve, etc.).
+        key = supabase_key or SUPABASE_KEY
+        bearer = bearer_token or key
         self.session = requests.Session()
         self.session.headers.update({
-            "apikey": supabase_key or SUPABASE_KEY,
-            "Authorization": f"Bearer {bearer_token or COLLECTOR_BEARER}",
+            "apikey": key,
+            "Authorization": f"Bearer {bearer}",
             "Content-Type": "application/json",
             "Accept-Profile": "xerenity",
             "Content-Profile": "xerenity",
