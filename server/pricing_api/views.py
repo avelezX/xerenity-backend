@@ -632,19 +632,23 @@ def _ql_date_to_str(d: ql.Date) -> str:
 
 
 def _overnight_rates(cm) -> tuple:
-    """Return (ibr_overnight, sofr_overnight) as decimals from the curves."""
+    """Return (ibr_overnight, sofr_overnight) as continuous annual decimals from the curves.
+
+    Uses zero rate at 1M as a proxy for overnight to avoid short-end extrapolation failures.
+    Both rates are continuous to be consistent with each other.
+    """
     eval_date = ql.Settings.instance().evaluationDate
-    next_day = eval_date + 1
-    day_count = ql.Actual360()
+    one_month = eval_date + ql.Period(1, ql.Months)
+    day_count = ql.Actual365Fixed()
     try:
-        ibr_overnight = cm.ibr_handle.forwardRate(
-            eval_date, next_day, day_count, ql.Continuous
+        ibr_overnight = cm.ibr_handle.zeroRate(
+            one_month, day_count, ql.Continuous
         ).rate()
     except Exception:
         ibr_overnight = 0.0
     try:
-        sofr_overnight = cm.sofr_handle.forwardRate(
-            eval_date, next_day, day_count, ql.Continuous
+        sofr_overnight = cm.sofr_handle.zeroRate(
+            one_month, day_count, ql.Continuous
         ).rate()
     except Exception:
         sofr_overnight = 0.0
@@ -678,9 +682,12 @@ def _price_ndf_full(ndf_pricer, pos: dict, cm, ibr_overnight: float, sofr_overni
     mat_py = date(mat.year(), mat.month(), mat.dayOfMonth())
     days_to_maturity = max(0, (mat_py - eval_py).days)
 
-    # Daily carry: theta from rate differential
-    # For buy-USD NDF: carry = notional * spot * (r_ibr - r_sofr) / 365
-    carry_cop_daily = sign * notional_usd * spot * (ibr_overnight - sofr_overnight) / 365
+    # Daily carry: theta from rate differential.
+    # sell-USD NDF (sign=-1): long COP, short USD → earn IBR, pay SOFR → positive carry
+    # buy-USD  NDF (sign=+1): short COP, long USD → pay IBR, earn SOFR → negative carry
+    # IBR is the actual COP overnight funding rate; SOFR is the USD overnight rate.
+    # NDF market curve is used for discounting only, not for carry computation.
+    carry_cop_daily = -sign * notional_usd * spot * (ibr_overnight - sofr_overnight) / 365
     carry_usd_daily = carry_cop_daily / spot if spot else 0.0
 
     # DV01 IBR: bump +1bp → reprice → diff (in COP)
@@ -1070,6 +1077,20 @@ def pricing_portfolio_reprice(request):
         fx = _fetch_historical_spot(loader, valuation_date_str)
         if fx:
             cm.set_fx_spot(fx)
+
+        # Build NDF market curve (required for correct NDF discount factors)
+        if cm.fx_spot and cm.sofr_curve is not None:
+            marks = loader.fetch_marks(target_date=valuation_date_str)
+            if marks and marks.get("ndf"):
+                cm.build_ndf_from_marks(marks["ndf"], cm.fx_spot)
+            else:
+                cop_fwd = loader.fetch_cop_forwards(target_date=valuation_date_str)
+                if not cop_fwd.empty:
+                    from pricing.curves.ndf_curve import build_ndf_curve
+                    cm.ndf_curve, _ = build_ndf_curve(
+                        cop_fwd, cm.fx_spot, cm.sofr_handle, cm.valuation_date
+                    )
+                    cm.ndf_handle.linkTo(cm.ndf_curve)
 
         curves_rebuilt_for_history = True
 
