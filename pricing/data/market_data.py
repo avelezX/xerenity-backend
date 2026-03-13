@@ -58,15 +58,25 @@ class MarketDataLoader:
         """
         Fetch SOFR par swap rates from sofr_swap_curve table.
         Returns DataFrame with columns: tenor_months, swap_rate
+
+        Uses lte (not eq) so that historical and intraday requests still find
+        the most recent available curve when today's data hasn't been collected
+        yet (SOFR collector runs at 21:00 UTC).
         """
-        if target_date is None:
-            target_date = self._latest_date("sofr_swap_curve")
-        if target_date is None:
+        effective_date = target_date or date.today().isoformat()
+
+        # Get the most recent fecha <= effective_date
+        latest = self._get(
+            "sofr_swap_curve",
+            f"select=fecha&fecha=lte.{effective_date}&order=fecha.desc&limit=1",
+        )
+        if not latest:
             return pd.DataFrame(columns=["tenor_months", "swap_rate"])
 
+        actual_date = latest[0]["fecha"]
         data = self._get(
             "sofr_swap_curve",
-            f"select=tenor_months,swap_rate&fecha=eq.{target_date}&order=tenor_months.asc",
+            f"select=tenor_months,swap_rate&fecha=eq.{actual_date}&order=tenor_months.asc",
         )
         return pd.DataFrame(data)
 
