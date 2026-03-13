@@ -43,6 +43,25 @@ def _parse_date(s):
     return datetime_to_ql(dt)
 
 
+def _fetch_historical_spot(loader, fecha: str) -> float | None:
+    """
+    Fetch USD/COP spot for a historical date.
+
+    Priority:
+    1. market_marks.fx_spot — canonical EOD mark stored by run_compute_marks.py.
+       This is the same value shown in the mark bar on the frontend, so using it
+       ensures the spot used for pricing is consistent with what the user sees.
+    2. fetch_usdcop_spot() — currency_hour (SET-ICAP) or cop_fwd_points fallback.
+    """
+    data = loader._get(
+        "market_marks",
+        f"select=fx_spot&fecha=eq.{fecha}&limit=1",
+    )
+    if data and data[0].get("fx_spot") is not None:
+        return float(data[0]["fx_spot"])
+    return loader.fetch_usdcop_spot(target_date=fecha)
+
+
 def _ensure_curves():
     cm = _get_cm()
     if cm.ibr_curve is None and cm.sofr_curve is None:
@@ -495,7 +514,7 @@ def pricing_reprice_portfolio(request):
         if not sofr_data.empty:
             cm.build_sofr_curve(sofr_data)
 
-        fx = loader.fetch_usdcop_spot(target_date=valuation_date_str)
+        fx = _fetch_historical_spot(loader, valuation_date_str)
         if fx:
             cm.set_fx_spot(fx)
 
@@ -1048,7 +1067,7 @@ def pricing_portfolio_reprice(request):
         if not sofr_data.empty:
             cm.build_sofr_curve(sofr_data)
 
-        fx = loader.fetch_usdcop_spot(target_date=valuation_date_str)
+        fx = _fetch_historical_spot(loader, valuation_date_str)
         if fx:
             cm.set_fx_spot(fx)
 
