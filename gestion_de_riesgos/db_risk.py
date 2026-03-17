@@ -16,6 +16,21 @@ def _get_xty():
     return xty
 
 
+def _fetch_risk_prices_raw(initial_date: str, final_date: str) -> pd.DataFrame:
+    """Fetch raw risk_prices rows (date, asset, price, contract)."""
+    xty = _get_xty()
+    data = xty.session.table('risk_prices') \
+        .select('date,asset,price,contract') \
+        .gte('date', initial_date) \
+        .lte('date', final_date) \
+        .order('date', desc=False) \
+        .execute().data
+
+    if not data:
+        return pd.DataFrame()
+    return pd.DataFrame(data)
+
+
 def get_risk_prices(initial_date: str, final_date: str) -> pd.DataFrame:
     """
     Obtiene precios historicos de activos de riesgo.
@@ -27,18 +42,9 @@ def get_risk_prices(initial_date: str, final_date: str) -> pd.DataFrame:
     Returns:
         DataFrame con columnas: ['date', 'MAIZ', 'AZUCAR', 'CACAO', 'USD']
     """
-    xty = _get_xty()
-    data = xty.session.table('risk_prices') \
-        .select('*') \
-        .gte('date', initial_date) \
-        .lte('date', final_date) \
-        .order('date', desc=False) \
-        .execute().data
-
-    if not data:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(data)
+    df = _fetch_risk_prices_raw(initial_date, final_date)
+    if df.empty:
+        return df
 
     # Pivotar: filas (date, asset, price) -> columnas ['date', 'MAIZ', 'AZUCAR', ...]
     if 'asset' in df.columns and 'price' in df.columns:
@@ -48,6 +54,26 @@ def get_risk_prices(initial_date: str, final_date: str) -> pd.DataFrame:
         return pivot
 
     return df
+
+
+def get_risk_contracts(initial_date: str, final_date: str) -> dict:
+    """
+    Retorna el ultimo contrato (ticker) usado por cada activo en el rango.
+
+    Returns:
+        dict: {'MAIZ': 'ZCH26', 'AZUCAR': 'SBK6', 'CACAO': 'CCH26', 'USD': 'TRM'}
+    """
+    df = _fetch_risk_prices_raw(initial_date, final_date)
+    if df.empty:
+        return {}
+
+    contracts = {}
+    for asset in df['asset'].unique():
+        asset_df = df[df['asset'] == asset].sort_values('date')
+        last_contract = asset_df['contract'].dropna().iloc[-1] if asset_df['contract'].notna().any() else None
+        if last_contract:
+            contracts[asset] = last_contract
+    return contracts
 
 
 def get_risk_positions(portfolio_id: str = None) -> list[dict]:
@@ -90,7 +116,7 @@ def upsert_risk_prices(records: list[dict]) -> None:
         records: Lista de dicts con: date, asset, price
     """
     xty = _get_xty()
-    xty.session.table('risk_prices').upsert(records).execute()
+    xty.session.table('risk_prices').upsert(records, on_conflict='date,asset').execute()
 
 
 def upsert_risk_positions(records: list[dict]) -> None:
