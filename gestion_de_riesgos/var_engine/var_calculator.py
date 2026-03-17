@@ -3,29 +3,30 @@ import pandas as pd
 from scipy.stats import norm
 
 
-CONFIDENCE_LEVEL = 0.95
+DEFAULT_CONFIDENCE = 0.99
 ROLLING_WINDOW = 180
-Z_SCORE = norm.ppf(CONFIDENCE_LEVEL)
 
 
 class VaRCalculator:
     """
     Calcula Value at Risk (VaR) parametrico diario usando volatilidad rolling.
     - Ventana rolling: 180 dias
-    - Nivel de confianza: 95%
+    - Nivel de confianza: configurable (default 99%)
     - Metodo: VaR parametrico (varianza-covarianza)
     """
 
-    def __init__(self, prices: pd.DataFrame, window: int = ROLLING_WINDOW):
+    def __init__(self, prices: pd.DataFrame, window: int = ROLLING_WINDOW,
+                 confidence_level: float = DEFAULT_CONFIDENCE):
         """
         Args:
             prices: DataFrame con columna 'date' y columnas de precios por activo.
-                    Ejemplo columnas: ['date', 'MAIZ', 'AZUCAR', 'CACAO', 'USD']
             window: Ventana rolling en dias para calcular volatilidad.
+            confidence_level: Nivel de confianza (0.90, 0.95, 0.99).
         """
         self.prices = prices.copy()
         self.window = window
-        self.z_score = Z_SCORE
+        self.confidence_level = confidence_level
+        self.z_score = norm.ppf(confidence_level)
         self.returns = None
         self.volatilities = None
 

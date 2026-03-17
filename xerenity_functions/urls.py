@@ -177,6 +177,39 @@ def risk_benchmark_factors(request):
         return responseHttpError(message=str(e), code=400)
 
 
+def risk_exposure(request):
+    try:
+        from server.risk_management_server.risk_management_server import RiskManagementServer
+        calc = RiskManagementServer(json.loads(request.body))
+        return calc.exposure()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
+def risk_collectors_status(request):
+    try:
+        from server.risk_management_server.risk_management_server import RiskManagementServer
+        calc = RiskManagementServer(json.loads(request.body))
+        return calc.collectors_status()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
+def risk_update_prices(request):
+    try:
+        from server.risk_management_server.risk_management_server import RiskManagementServer
+        calc = RiskManagementServer(json.loads(request.body))
+        return calc.update_prices()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
 def wake_up(request):
     return responseHttpOk(body={"message": "Servidor de creditos activado"})
 
@@ -194,6 +227,9 @@ urlpatterns = [
     path("risk_management", csrf_exempt(risk_management), name="risk_management"),
     path("risk_rolling_var", csrf_exempt(risk_rolling_var), name="risk_rolling_var"),
     path("risk_benchmark_factors", csrf_exempt(risk_benchmark_factors), name="risk_benchmark_factors"),
+    path("risk_exposure", csrf_exempt(risk_exposure), name="risk_exposure"),
+    path("risk_collectors_status", csrf_exempt(risk_collectors_status), name="risk_collectors_status"),
+    path("risk_update_prices", csrf_exempt(risk_update_prices), name="risk_update_prices"),
     # Pricing API
     path("pricing/curves/build", pricing_build, name="pricing_build"),
     path("pricing/curves/status", pricing_status, name="pricing_status"),

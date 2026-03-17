@@ -17,6 +17,7 @@ Arquitectura:
 from abc import ABC, abstractmethod
 from pathlib import Path
 from datetime import datetime, date, timedelta
+import calendar
 import pandas as pd
 import numpy as np
 import json
@@ -42,24 +43,43 @@ IB_PORT = 7496   # 7497 para paper trading
 # =======================================================
 
 # Config de contratos por commodity
+#
+# Reglas de vencimiento por exchange:
+#   CBOT (ZC):  Ultimo dia de trading = dia habil anterior al 15 del mes del contrato
+#   ICE (SB):   Ultimo dia de trading = ultimo dia habil del mes ANTERIOR al contrato
+#   ICE (CC):   Ultimo dia de trading ~ 10 dias habiles antes del fin del mes del contrato
+#
+# roll_days_before: dias calendario antes del vencimiento para hacer el roll
+# expiry_day: dia aproximado de vencimiento dentro del mes de expiracion
+# expiry_month_offset: 0 = mes del contrato, -1 = mes anterior al contrato
+#
 COMMODITY_CONFIG = {
     'MAIZ': {
         'symbol': 'ZC',
         'exchanges': ['CBOT', 'ECBOT'],
         'months': {'H': '03', 'K': '05', 'N': '07', 'U': '09', 'Z': '12'},
         'code_pattern': r'ZC[HKNUZ]\d{2}',
+        'expiry_day': 14,
+        'expiry_month_offset': 0,
+        'roll_days_before': 10,
     },
     'AZUCAR': {
         'symbol': 'SB',
         'exchanges': ['NYBOT', 'ICEUS'],
         'months': {'H': '03', 'K': '05', 'N': '07', 'V': '10'},
         'code_pattern': r'SB[HKNV]\d{1,2}',
+        'expiry_day': 28,
+        'expiry_month_offset': -1,
+        'roll_days_before': 10,
     },
     'CACAO': {
         'symbol': 'CC',
         'exchanges': ['NYBOT', 'ICEUS'],
         'months': {'H': '03', 'K': '05', 'N': '07', 'U': '09', 'Z': '12'},
         'code_pattern': r'CC[HKNUZ]\d{2}',
+        'expiry_day': 14,
+        'expiry_month_offset': 0,
+        'roll_days_before': 10,
     },
 }
 
@@ -96,42 +116,95 @@ def _load_json(path: Path) -> dict:
         return json.load(f)
 
 
-def _pick_front_contract(db: dict, config: dict) -> str:
+def _get_expiry_date(yyyymm: str, config: dict) -> date:
     """
-    Selecciona el contrato front (vigente mas cercano con datos recientes).
-    Logica basada en maiz.ipynb: pick_front_contract_async.
+    Calcula la fecha aproximada de vencimiento de un contrato.
+
+    Usa expiry_day y expiry_month_offset del config:
+    - expiry_day: dia del mes en que vence (default 14)
+    - expiry_month_offset: 0 = mes del contrato, -1 = mes anterior (default 0)
+
+    Ejemplo:
+        ZCH26 (Mar 2026, CBOT): expiry_day=14, offset=0 -> 14 Mar 2026
+        SBH26 (Mar 2026, ICE):  expiry_day=28, offset=-1 -> 28 Feb 2026
+    """
+    year = int(yyyymm[:4])
+    month = int(yyyymm[4:6])
+
+    offset = config.get('expiry_month_offset', 0)
+    month += offset
+    if month <= 0:
+        month += 12
+        year -= 1
+    elif month > 12:
+        month -= 12
+        year += 1
+
+    expiry_day = config.get('expiry_day', 14)
+    max_day = calendar.monthrange(year, month)[1]
+    day = min(expiry_day, max_day)
+
+    return date(year, month, day)
+
+
+def _get_roll_date(yyyymm: str, config: dict) -> date:
+    """
+    Calcula la fecha en que se debe hacer el roll al siguiente contrato.
+    Roll date = expiry_date - roll_days_before.
+    """
+    expiry = _get_expiry_date(yyyymm, config)
+    roll_days = config.get('roll_days_before', 10)
+    return expiry - timedelta(days=roll_days)
+
+
+def _pick_front_contract(db: dict, config: dict, ref_date: date = None) -> str:
+    """
+    Selecciona el contrato front (vigente mas cercano) usando fechas de
+    vencimiento reales en lugar de solo comparar el mes calendario.
+
+    Logica:
+    1. Calcula la fecha de roll para cada contrato
+    2. Descarta contratos cuya fecha de roll ya paso (ya debio haber rolado)
+    3. Entre los activos, toma el mas cercano a vencer
+    4. Si hay empate, prefiere el que tenga datos mas recientes
+
+    Args:
+        db: dict con datos del JSON {contract_code: [bars]}
+        config: COMMODITY_CONFIG del asset
+        ref_date: fecha de referencia (default: hoy)
     """
     pattern = config['code_pattern']
-    today = date.today()
-    today_str = today.strftime("%Y-%m-%d")
+    today = ref_date or date.today()
 
     contracts = []
     for code in db.keys():
         if re.fullmatch(pattern, code):
             try:
                 yyyymm = _code_to_yyyymm(code, config)
-                contracts.append((code, yyyymm))
+                expiry = _get_expiry_date(yyyymm, config)
+                roll = _get_roll_date(yyyymm, config)
+                contracts.append((code, yyyymm, expiry, roll))
             except ValueError:
                 continue
 
     if not contracts:
         return ""
 
-    # Filtrar contratos cuyo mes de expiracion >= mes actual
-    current_yyyymm = today.strftime("%Y%m")
-    active = [(code, ym) for code, ym in contracts if ym >= current_yyyymm]
+    # Filtrar contratos cuya fecha de roll aun no ha pasado
+    active = [(code, ym, exp, roll) for code, ym, exp, roll in contracts if roll > today]
 
     if not active:
-        # Si no hay activos, tomar el mas reciente
-        active = contracts
+        # Todos ya rolaron: tomar el mas reciente (ultimo en vencer)
+        contracts.sort(key=lambda x: x[2], reverse=True)
+        return contracts[0][0]
 
-    # Ordenar por fecha de expiracion y tomar el mas cercano
-    active.sort(key=lambda x: x[1])
+    # Ordenar por fecha de expiracion (mas cercano primero)
+    active.sort(key=lambda x: x[2])
 
-    # Preferir el que tenga datos mas recientes
+    # Entre los 3 mas cercanos, preferir el que tenga datos mas recientes
     best_code = active[0][0]
     best_last_date = ""
-    for code, ym in active[:3]:  # Revisar los 3 mas cercanos
+    for code, ym, exp, roll in active[:3]:
         bars = db.get(code, [])
         if bars:
             last = max(r["date"] for r in bars)
@@ -190,6 +263,7 @@ class BaseCollector(ABC):
                 'date': str(row['date']),
                 'asset': self.asset_name,
                 'price': float(row['close']),
+                'contract': row.get('contract'),
                 'collected_at': datetime.now().isoformat(),
             }
             for _, row in prices_df.iterrows()
@@ -226,6 +300,7 @@ class FuturesJSONCollector(BaseCollector):
             return df
 
         df = df[df['date'] <= end_date]
+        df['contract'] = contract
         return df
 
     def get_available_contracts(self) -> list[str]:
@@ -244,6 +319,55 @@ class FuturesJSONCollector(BaseCollector):
         """Retorna el codigo del contrato front actual."""
         db = _load_json(self.json_path)
         return _pick_front_contract(db, self.config)
+
+    def get_contract_schedule(self) -> list[dict]:
+        """
+        Retorna el calendario de contratos con fechas de expiracion y roll.
+
+        Returns:
+            Lista de dicts con: code, yyyymm, expiry_date, roll_date, status,
+                                last_data_date, data_points
+        """
+        db = _load_json(self.json_path)
+        pattern = self.config['code_pattern']
+        today = date.today()
+        front = _pick_front_contract(db, self.config)
+
+        schedule = []
+        for code in sorted(db.keys()):
+            if not re.fullmatch(pattern, code):
+                continue
+            try:
+                yyyymm = _code_to_yyyymm(code, self.config)
+                expiry = _get_expiry_date(yyyymm, self.config)
+                roll = _get_roll_date(yyyymm, self.config)
+
+                bars = db.get(code, [])
+                last_date = max((r["date"] for r in bars), default=None) if bars else None
+
+                if code == front:
+                    status = "FRONT"
+                elif expiry < today:
+                    status = "EXPIRED"
+                elif roll <= today:
+                    status = "ROLLING"
+                else:
+                    status = "ACTIVE"
+
+                schedule.append({
+                    'code': code,
+                    'yyyymm': yyyymm,
+                    'expiry_date': expiry.isoformat(),
+                    'roll_date': roll.isoformat(),
+                    'status': status,
+                    'last_data_date': last_date,
+                    'data_points': len(bars),
+                    'is_front': code == front,
+                })
+            except ValueError:
+                continue
+
+        return schedule
 
 
 class CornCollector(FuturesJSONCollector):
@@ -334,6 +458,7 @@ class TRMCollector(BaseCollector):
         result = pd.DataFrame({
             'date': df["fecha"].dt.strftime('%Y-%m-%d'),
             'close': df["precio"].values,
+            'contract': 'TRM',
         })
 
         return result.reset_index(drop=True)
@@ -363,6 +488,7 @@ class TRMCollector(BaseCollector):
         result = pd.DataFrame({
             'date': df["fecha"].dt.strftime('%Y-%m-%d'),
             'close': df["precio"].values,
+            'contract': 'TRM',
         })
 
         return result.reset_index(drop=True)
