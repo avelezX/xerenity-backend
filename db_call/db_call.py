@@ -6,6 +6,7 @@ import os
 xty = Xerenity(
     username=os.getenv('XTY_USER'),
     password=os.getenv('XTY_PWD'),
+    auto_refresh=True,
 )
 
 

@@ -16,6 +16,8 @@ class RiskManagementServer(XerenityFunctionServer):
         self.filter_date = body['filter_date']
         self.portfolio_id = body.get('portfolio_id', None)
         self.mock = body.get('mock', False)
+        self.exposure_params = body.get('exposure_params', None)
+        self.confidence_level = body.get('confidence_level', 0.99)
 
     def calculate(self):
         """
@@ -210,7 +212,7 @@ class RiskManagementServer(XerenityFunctionServer):
         - price_start: precio inicio del mes anterior
         - price_end: precio fin del mes anterior
         """
-        from gestion_de_riesgos.db_risk import get_risk_prices
+        from gestion_de_riesgos.db_risk import get_risk_prices, get_risk_contracts
         from gestion_de_riesgos.var_engine.var_calculator import VaRCalculator
         from datetime import datetime, timedelta
         import pandas as pd
@@ -240,21 +242,30 @@ class RiskManagementServer(XerenityFunctionServer):
             )
 
         # Factor VaR diario (ultimo dia disponible)
-        calc = VaRCalculator(prices_df, window=180)
+        calc = VaRCalculator(prices_df, window=180, confidence_level=self.confidence_level)
         factors = calc.get_latest_var_factors()
 
-        # Retornos logaritmicos y varianza/covarianza
+        # Retornos logaritmicos independientes por activo
         import numpy as np
-        calc.calculate_returns()
-        returns_df = calc.returns.copy()
         prices_df['date'] = pd.to_datetime(prices_df['date'])
         price_cols = [c for c in prices_df.columns if c != 'date']
 
-        # Matriz de covarianza de retornos (ultimos 180 dias)
-        returns_only = returns_df[price_cols].dropna()
-        if len(returns_only) > 180:
-            returns_only = returns_only.tail(180)
-        cov_matrix = returns_only.cov()
+        # Returns independientes: cada activo usa solo sus dias con precio real
+        returns_indep = pd.DataFrame(index=prices_df.index)
+        for col in price_cols:
+            series = prices_df[col].dropna()
+            returns_indep[col] = np.log(series / series.shift(1))
+
+        # Ultimas 180 filas del indice (rango temporal)
+        returns_window = returns_indep.tail(180)
+
+        # Covarianza pairwise: cada par usa los dias donde ambos tienen return
+        cov_matrix = returns_window.cov(min_periods=20)
+
+        # Rango real de datos y observaciones por activo
+        cov_start = str(prices_df['date'].iloc[returns_window.index[0]])[:10]
+        cov_end = str(prices_df['date'].iloc[returns_window.index[-1]])[:10]
+        cov_obs_per_asset = {col: int(returns_window[col].notna().sum()) for col in price_cols}
 
         # Serializar matriz de covarianza
         cov_dict = {}
@@ -270,8 +281,8 @@ class RiskManagementServer(XerenityFunctionServer):
             val = cov_matrix.loc[col, col]
             daily_variance[col] = round(float(val), 10) if not np.isnan(val) else None
 
-        # Matriz de correlacion
-        corr_matrix = returns_only.corr()
+        # Matriz de correlacion (pairwise)
+        corr_matrix = returns_window.corr(min_periods=20)
         corr_dict = {}
         for row_asset in price_cols:
             corr_dict[row_asset] = {}
@@ -281,28 +292,35 @@ class RiskManagementServer(XerenityFunctionServer):
 
         units = {'MAIZ': 'TONS', 'AZUCAR': 'TONS', 'CACAO': 'TONS', 'USD': 'USD/COP'}
 
-        # Precios hardcoded (31-ene-26 y 27-feb-26)
-        hardcoded_prices = {
-            'MAIZ':   {'price_start': 435.750, 'price_end': 448.50},
-            'AZUCAR': {'price_start': 13.84,   'price_end': 13.89},
-            'CACAO':  {'price_start': 4.162,   'price_end': 2.798},
-            'USD':    {'price_start': 3670.47,  'price_end': 3745.78},
-        }
-
         def clean(v):
             if v is None or (isinstance(v, float) and math.isnan(v)):
                 return None
             return v
 
+        def find_price(df, col, target_date):
+            """Find the closest available price on or before target_date."""
+            mask = df['date'] <= target_date.strftime('%Y-%m-%d')
+            subset = df.loc[mask, ['date', col]].dropna(subset=[col])
+            if subset.empty:
+                return None
+            return round(float(subset.iloc[-1][col]), 4)
+
+        contracts = get_risk_contracts(
+            initial_date=start_history.strftime('%Y-%m-%d'),
+            final_date=price_end_date.strftime('%Y-%m-%d')
+        )
+
         result = {}
         for col in price_cols:
-            hc = hardcoded_prices.get(col, {})
+            p_start = find_price(prices_df, col, price_start_date)
+            p_end = find_price(prices_df, col, price_end_date)
             result[col] = {
                 'factor_var_diario': clean(factors.get(col, 0)),
                 'daily_variance': daily_variance.get(col),
-                'price_start': hc.get('price_start'),
-                'price_end': hc.get('price_end'),
+                'price_start': p_start,
+                'price_end': p_end,
                 'factor_unit': units.get(col, ''),
+                'contract': contracts.get(col),
             }
 
         return responseHttpOk(body={
@@ -310,10 +328,18 @@ class RiskManagementServer(XerenityFunctionServer):
             'covariance_matrix': cov_dict,
             'correlation_matrix': corr_dict,
             'assets': price_cols,
+            'contracts': contracts,
             'period': {
                 'start': price_start_date.strftime('%Y-%m-%d'),
                 'end': price_end_date.strftime('%Y-%m-%d'),
-            }
+            },
+            'covariance_period': {
+                'start': cov_start,
+                'end': cov_end,
+                'observations': cov_obs_per_asset,
+            },
+            'confidence_level': self.confidence_level,
+            'z_score': round(float(calc.z_score), 4),
         })
 
     def rolling_var(self):
@@ -324,10 +350,11 @@ class RiskManagementServer(XerenityFunctionServer):
             {
                 "dates": ["2025-06-01", ...],
                 "prices": {"MAIZ": [...], "AZUCAR": [...], ...},
-                "rolling_var": {"MAIZ": [...], "AZUCAR": [...], ...}
+                "rolling_var": {"MAIZ": [...], "AZUCAR": [...], ...},
+                "contracts": {"MAIZ": "ZCH26", ...}
             }
         """
-        from gestion_de_riesgos.db_risk import get_risk_prices
+        from gestion_de_riesgos.db_risk import get_risk_prices, get_risk_contracts
         from gestion_de_riesgos.var_engine.var_calculator import VaRCalculator
         from datetime import datetime, timedelta
         import math
@@ -346,7 +373,12 @@ class RiskManagementServer(XerenityFunctionServer):
                 code=404
             )
 
-        calc = VaRCalculator(prices_df, window=180)
+        contracts = get_risk_contracts(
+            initial_date=start_date.strftime('%Y-%m-%d'),
+            final_date=self.filter_date
+        )
+
+        calc = VaRCalculator(prices_df, window=180, confidence_level=self.confidence_level)
         var_factors = calc.calculate_var_factor()
 
         dates = prices_df['date'].tolist()
@@ -362,7 +394,6 @@ class RiskManagementServer(XerenityFunctionServer):
                 None if (v is None or (isinstance(v, float) and math.isnan(v))) else round(v, 4)
                 for v in price_list
             ]
-            # VaR en USD = var_factor * precio (var_factor ya incluye Z * volatilidad)
             rolling_var_dict[col] = [
                 None if (v is None or p is None or
                          (isinstance(v, float) and math.isnan(v)) or
@@ -375,4 +406,140 @@ class RiskManagementServer(XerenityFunctionServer):
             'dates': dates,
             'prices': prices_dict,
             'rolling_var': rolling_var_dict,
+            'contracts': contracts,
         })
+
+    def collectors_status(self):
+        """
+        Retorna el estado de los collectors y calendario de contratos.
+        Incluye fechas de vencimiento, roll, y contrato front actual.
+        """
+        from gestion_de_riesgos.collectors.base_collector import (
+            COLLECTORS, COMMODITY_CONFIG, JSON_PATHS,
+            FuturesJSONCollector, get_collectors_status,
+        )
+
+        status = get_collectors_status()
+
+        # Agregar calendario de contratos para cada commodity
+        for asset_name in ['MAIZ', 'AZUCAR', 'CACAO']:
+            if asset_name in COMMODITY_CONFIG and asset_name in JSON_PATHS:
+                collector = FuturesJSONCollector(
+                    asset_name, JSON_PATHS[asset_name], COMMODITY_CONFIG[asset_name]
+                )
+                schedule = collector.get_contract_schedule()
+                if asset_name in status:
+                    status[asset_name]['schedule'] = schedule
+
+        return responseHttpOk(body=status)
+
+    def update_prices(self):
+        """
+        Actualiza precios en Supabase leyendo de los JSON locales.
+        Usa la nueva logica de roll con fechas de expiracion reales.
+
+        Request body:
+            {
+                "filter_date": "2026-03-17",
+                "assets": ["MAIZ", "AZUCAR", "CACAO", "USD"]  // opcional, default: todos
+            }
+        """
+        from gestion_de_riesgos.collectors.base_collector import (
+            COLLECTORS, collect_all,
+        )
+        from datetime import datetime, timedelta
+
+        end_date = self.filter_date
+        ref = datetime.strptime(end_date, '%Y-%m-%d')
+        start_date = (ref - timedelta(days=365)).strftime('%Y-%m-%d')
+
+        results = collect_all(start_date, end_date)
+        return responseHttpOk(body=results)
+
+    def exposure(self):
+        """
+        Calcula la exposición en USD por commodity.
+
+        Request body (además de filter_date):
+            {
+                "filter_date": "2026-03-12",
+                "exposure_params": {
+                    "proyeccion_azucar": [3157, 3157, ...],  // 12 meses
+                    "precio_azucar_cent_lb": 13.89,
+                    "factor_crudo_refinado": 1.05,
+                    "proyeccion_glucosa": [2277, 2277, ...],
+                    "precio_maiz_cent_bu": 442,
+                    "base_maiz_cent_bu": 80,
+                    "flete_usd_ton": 46,
+                    "processing_fee_usd": 263,
+                    "proc_fee_cop_kg": 668,
+                    "trm": 3800,
+                    "factor_maiz_glucosa": 1.495,
+                    "proyeccion_cocoa_polvo": [24, 24, ...],
+                    "factor_cocoa_polvo": 1.22,
+                    "proyeccion_manteca": [13, 13, ...],
+                    "factor_manteca": 1.95,
+                    "proyeccion_licor": [4, 4, ...],
+                    "factor_licor": 1.53,
+                    "precio_cocoa_usd_ton": 2798,
+                    "proyeccion_bolsa": [151, 151, ...],
+                    "proyeccion_envoltura": [138, 138, ...],
+                    "precio_empaque_fijo": 21610000,
+                    "ventas_intl_usd": 130025826,
+                    "ventas_co_usd": 0,
+                    "ventas_pe_usd": 42827644
+                }
+            }
+        """
+        from gestion_de_riesgos.exposure import calcular_exposicion_total
+        from gestion_de_riesgos.db_risk import get_risk_prices, get_risk_contracts
+        from datetime import datetime, timedelta
+
+        params = self.exposure_params
+        if not params:
+            raise XerenityError(
+                message="Missing exposure_params in request body",
+                code=400
+            )
+
+        # Fetch latest futures prices from Supabase
+        ref_date = datetime.strptime(self.filter_date, '%Y-%m-%d')
+        start_fetch = ref_date - timedelta(days=60)
+        prices_df = get_risk_prices(
+            initial_date=start_fetch.strftime('%Y-%m-%d'),
+            final_date=self.filter_date
+        )
+
+        contracts = get_risk_contracts(
+            initial_date=start_fetch.strftime('%Y-%m-%d'),
+            final_date=self.filter_date
+        )
+
+        market_prices = {}
+        if not prices_df.empty:
+            # Map DB columns to exposure params
+            price_map = {
+                'AZUCAR': 'precio_azucar_cent_lb',
+                'MAIZ': 'precio_maiz_cent_bu',
+                'CACAO': 'precio_cocoa_usd_ton',
+                'USD': 'trm',
+            }
+            for db_col, param_key in price_map.items():
+                if db_col in prices_df.columns:
+                    col_data = prices_df[['date', db_col]].dropna(subset=[db_col])
+                    if not col_data.empty:
+                        last_row = col_data.iloc[-1]
+                        price_val = float(last_row[db_col])
+                        price_date = str(last_row['date'])
+                        market_prices[param_key] = {
+                            'value': round(price_val, 4),
+                            'date': price_date,
+                            'source': db_col,
+                            'contract': contracts.get(db_col),
+                        }
+                        # Override param with DB price
+                        params[param_key] = price_val
+
+        result = calcular_exposicion_total(params)
+        result['market_prices'] = market_prices
+        return responseHttpOk(body=result)
