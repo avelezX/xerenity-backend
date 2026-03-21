@@ -1,6 +1,6 @@
 """Pydantic request/response models for pricing API."""
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 _VALID_AMORT_TYPES = {"bullet", "linear", "custom"}
@@ -207,6 +207,14 @@ class PeriodCashflow(BaseModel):
     cop_net: float = Field(..., description="Total net COP flow this period (coupon + principal).")
     ibr_fwd_pct: Optional[float] = Field(None, description="IBR forward rate % for this period. None for settled.")
     sofr_fwd_pct: Optional[float] = Field(None, description="SOFR forward rate % for this period. None for settled.")
+    realized_sofr_pct: Optional[float] = Field(
+        None,
+        description="Realized annualized SOFR % for settled periods (from fixings). None for current/future.",
+    )
+    realized_ibr_pct: Optional[float] = Field(
+        None,
+        description="Realized annualized IBR % for settled periods (from fixings). None for current/future.",
+    )
     status: str = Field(..., description="'settled' (past), 'current' (active accrual), 'future'.")
 
 
@@ -488,3 +496,104 @@ class RepricePortfolioRequest(BaseModel):
             "When None, uses the currently built curves (today's market data)."
         ),
     )
+
+
+# ── IBR OIS Cashflow Schedule ──
+
+
+class IbrPeriodCashflow(BaseModel):
+    """Un período del schedule de cashflows de un IBR OIS swap."""
+    period_num: int = Field(..., description="1..N (no hay período 0 de intercambio nocional).")
+    date_start: str = Field(..., description="Fecha inicio del período YYYY-MM-DD.")
+    date_end: str = Field(..., description="Fecha de pago YYYY-MM-DD.")
+    notional: float = Field(..., description="Nocional COP vigente durante el período.")
+    fixed_coupon: Optional[float] = Field(None, description="Cupón fijo COP (estimado o realizado).")
+    floating_coupon: Optional[float] = Field(None, description="Cupón flotante COP (estimado o realizado).")
+    net: Optional[float] = Field(
+        None,
+        description=(
+            "Flujo neto COP desde perspectiva del cliente. "
+            "pay_fixed=True: net = flotante − fija. Positivo si IBR > fixed_rate."
+        ),
+    )
+    ibr_fwd_pct: Optional[float] = Field(
+        None, description="IBR forward % estimado (solo current/future)."
+    )
+    realized_ibr_pct: Optional[float] = Field(
+        None, description="IBR overnight compuesto realizado % anualizado (solo settled con fixings)."
+    )
+    status: str = Field(..., description="'settled', 'current' o 'future'.")
+
+
+class IbrSwapCashflowResponse(BaseModel):
+    """
+    Schedule completo de cashflows de un IBR OIS swap.
+
+    Períodos settled incluyen cupones realizados cuando se proveen fixings históricos.
+    Períodos current/future usan la curva IBR forward para estimación.
+    """
+    notional: float
+    start_date: str = Field(..., description="Fecha de inicio del swap YYYY-MM-DD.")
+    maturity_date: str = Field(..., description="Fecha de vencimiento YYYY-MM-DD.")
+    fixed_rate_pct: float = Field(..., description="Tasa fija en porcentaje (e.g., 9.5).")
+    pay_fixed: bool
+    n_periods: int
+    periods: List[IbrPeriodCashflow]
+
+
+# ── Settled Flows Endpoint ──
+
+
+_VALID_INSTRUMENT_TYPES = {"xccy", "ibr_ois"}
+
+
+class SettledFlowsRequest(BaseModel):
+    """
+    Request para calcular flujos netos liquidados entre dos fechas.
+
+    El schedule del instrumento se genera internamente a partir de instrument_params.
+
+    instrument_type: 'xccy' o 'ibr_ois'
+
+    Para XCCY, instrument_params debe contener:
+        notional_usd, start_date, maturity_date, xccy_basis_bps,
+        pay_usd, fx_initial (opcional), cop_spread_bps, usd_spread_bps,
+        amortization_type, amortization_schedule (si custom),
+        payment_frequency_months
+
+    Para IBR OIS, instrument_params debe contener:
+        notional, tenor_years OR maturity_date, fixed_rate (decimal),
+        pay_fixed, spread (decimal)
+    """
+    instrument_type: str = Field(..., description="'xccy' o 'ibr_ois'.")
+    instrument_params: Dict[str, Any] = Field(
+        ..., description="Parámetros del trade (dependen de instrument_type)."
+    )
+    date_from: str = Field(..., description="Fecha inicio del rango (inclusive) YYYY-MM-DD.")
+    date_to: str = Field(..., description="Fecha fin del rango (inclusive) YYYY-MM-DD.")
+
+    @field_validator("instrument_type")
+    @classmethod
+    def validate_instrument_type(cls, v):
+        if v not in _VALID_INSTRUMENT_TYPES:
+            raise ValueError(f"instrument_type debe ser 'xccy' o 'ibr_ois', got '{v}'")
+        return v
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def validate_dates(cls, v):
+        _parse_date(v)
+        return v
+
+
+class SettledFlowsResponse(BaseModel):
+    """
+    Respuesta de flujos netos liquidados entre dos fechas.
+
+    total_net_cop:  Suma de flujos netos COP (cupones + amortizaciones).
+    total_net_usd:  Suma de flujos netos USD (solo XCCY, None para IBR OIS).
+    periods:        Lista de períodos procesados con detalle de cada flujo.
+    """
+    total_net_cop: float
+    total_net_usd: Optional[float]
+    periods: List[Dict[str, Any]]

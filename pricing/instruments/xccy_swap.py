@@ -27,6 +27,10 @@ import pandas as pd
 from datetime import datetime
 from scipy.optimize import brentq
 from utilities.date_functions import datetime_to_ql, ql_to_datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pricing.cashflows.fixing_repository import FixingRepository
 
 
 # Standard amortization types
@@ -660,6 +664,7 @@ class XccySwapPricer:
         payment_frequency: ql.Period = ql.Period(3, ql.Months),
         amortization_type: str = "bullet",
         amortization_schedule: list = None,
+        fixing_repo: "FixingRepository | None" = None,
     ) -> list:
         """
         Full cashflow schedule for a USD/COP Cross-Currency Swap.
@@ -672,8 +677,9 @@ class XccySwapPricer:
             cop_net  positive = client receives COP inflow
             status   'settled' (past), 'current' (active accrual), 'future'
 
-        For settled periods, forward rates and coupon amounts are None
-        (actual realized rates are not stored in the curve).
+        When fixing_repo is provided, settled periods are enriched with the
+        realized OIS compounding (usd_coupon, cop_coupon, realized_sofr_pct,
+        realized_ibr_pct). Without fixing_repo, those fields remain None.
         """
         if isinstance(start_date, datetime):
             start_date = datetime_to_ql(start_date)
@@ -709,26 +715,34 @@ class XccySwapPricer:
         cop_spd_dec = (xccy_basis_bps + cop_spread_bps) / 10_000.0
         sign        = 1.0 if pay_usd else -1.0
 
+        # Importar calculadora de realizados solo si se provee fixing_repo
+        realized_calc = None
+        if fixing_repo is not None:
+            from pricing.cashflows.realized_cashflows import RealizedCashflowCalculator
+            realized_calc = RealizedCashflowCalculator(fixing_repo)
+
         rows = []
 
         # ── Period 0: inception notional exchange ────────────────────────────
         t0     = dates[0]
         t0_str = ql_to_datetime(t0).strftime("%Y-%m-%d")
         rows.append({
-            "period_num":   0,
-            "date_start":   t0_str,
-            "date_end":     t0_str,
-            "notional_usd": notional_usd,
-            "notional_cop": notional_cop,
-            "usd_coupon":   None,
-            "cop_coupon":   None,
-            "usd_principal": round(-sign * notional_usd, 2),  # client pays USD
-            "cop_principal": round(+sign * notional_cop, 0),  # client receives COP
-            "usd_net":       round(-sign * notional_usd, 2),
-            "cop_net":       round(+sign * notional_cop, 0),
-            "ibr_fwd_pct":  None,
-            "sofr_fwd_pct": None,
-            "status":       "settled" if t0 <= eval_date else "future",
+            "period_num":        0,
+            "date_start":        t0_str,
+            "date_end":          t0_str,
+            "notional_usd":      notional_usd,
+            "notional_cop":      notional_cop,
+            "usd_coupon":        None,
+            "cop_coupon":        None,
+            "usd_principal":     round(-sign * notional_usd, 2),
+            "cop_principal":     round(+sign * notional_cop, 0),
+            "usd_net":           round(-sign * notional_usd, 2),
+            "cop_net":           round(+sign * notional_cop, 0),
+            "ibr_fwd_pct":       None,
+            "sofr_fwd_pct":      None,
+            "realized_sofr_pct": None,
+            "realized_ibr_pct":  None,
+            "status":            "settled" if t0 <= eval_date else "future",
         })
 
         # ── Periods 1..N: coupons + amortization ─────────────────────────────
@@ -738,6 +752,9 @@ class XccySwapPricer:
             N_usd   = usd_notionals[i - 1]
             N_cop   = cop_notionals[i - 1]
 
+            p_start_str = ql_to_datetime(p_start).strftime("%Y-%m-%d")
+            p_end_str   = ql_to_datetime(p_end).strftime("%Y-%m-%d")
+
             if p_end <= eval_date:
                 status = "settled"
             elif p_start < eval_date:
@@ -745,54 +762,78 @@ class XccySwapPricer:
             else:
                 status = "future"
 
-            # Forward rates only for current/future periods (settled = not in curve)
-            if status != "settled" and p_end > sofr_ref and p_end > ibr_ref:
-                sofr_start = p_start if p_start >= sofr_ref else sofr_ref
-                ibr_start  = p_start if p_start >= ibr_ref  else ibr_ref
-                tau        = dc.yearFraction(p_start, p_end)
-                sofr_fwd   = self.cm.sofr_handle.forwardRate(
-                    sofr_start, p_end, dc, ql.Simple).rate()
-                ibr_fwd    = self.cm.ibr_handle.forwardRate(
-                    ibr_start, p_end, dc, ql.Simple).rate()
-                usd_coupon = round(N_usd * (sofr_fwd + usd_spd_dec) * tau, 2)
-                cop_coupon = round(N_cop * (ibr_fwd  + cop_spd_dec) * tau, 0)
-                ibr_pct    = round(ibr_fwd * 100, 4)
-                sofr_pct   = round(sofr_fwd * 100, 4)
-            else:
-                usd_coupon = sofr_fwd = sofr_pct = None
-                cop_coupon = ibr_fwd  = ibr_pct  = None
-
-            # Principal flows at period end (deterministic, always known)
+            # Principal flows (determinísticos, siempre conocidos)
             if i < n_periods:
                 usd_amort = usd_notionals[i - 1] - usd_notionals[i]
                 cop_amort = cop_notionals[i - 1] - cop_notionals[i]
-            else:  # final: return remaining notional
+            else:
                 usd_amort = usd_notionals[-1]
                 cop_amort = cop_notionals[-1]
 
-            # Client perspective (pay_usd=True: pays USD coupons, receives COP coupons)
-            # At amortizations: receives USD back (+), returns COP (-)
-            usd_principal = round(sign * usd_amort, 2)   # + = receive back
-            cop_principal = round(-sign * cop_amort, 0)  # - = return
+            usd_principal = round(sign * usd_amort, 2)
+            cop_principal = round(-sign * cop_amort, 0)
+
+            realized_sofr_pct = None
+            realized_ibr_pct  = None
+
+            if status == "settled":
+                if realized_calc is not None:
+                    # Calcular cupones realizados con fixings históricos
+                    period_dict = {"date_start": p_start_str, "date_end": p_end_str}
+                    realized = realized_calc.xccy_settled_period(
+                        period=period_dict,
+                        notional_usd=N_usd,
+                        notional_cop=N_cop,
+                        usd_spread_bps=usd_spread_bps,
+                        cop_spread_bps=cop_spread_bps,
+                        xccy_basis_bps=xccy_basis_bps,
+                    )
+                    usd_coupon        = realized["usd_coupon"]
+                    cop_coupon        = realized["cop_coupon"]
+                    realized_sofr_pct = realized["realized_sofr_pct"]
+                    realized_ibr_pct  = realized["realized_ibr_pct"]
+                else:
+                    usd_coupon = cop_coupon = None
+
+                ibr_pct = sofr_pct = None
+
+            else:
+                # Estimar con curvas forward (current/future)
+                if p_end > sofr_ref and p_end > ibr_ref:
+                    sofr_start = p_start if p_start >= sofr_ref else sofr_ref
+                    ibr_start  = p_start if p_start >= ibr_ref  else ibr_ref
+                    tau        = dc.yearFraction(p_start, p_end)
+                    sofr_fwd   = self.cm.sofr_handle.forwardRate(
+                        sofr_start, p_end, dc, ql.Simple).rate()
+                    ibr_fwd    = self.cm.ibr_handle.forwardRate(
+                        ibr_start, p_end, dc, ql.Simple).rate()
+                    usd_coupon = round(N_usd * (sofr_fwd + usd_spd_dec) * tau, 2)
+                    cop_coupon = round(N_cop * (ibr_fwd  + cop_spd_dec) * tau, 0)
+                    ibr_pct    = round(ibr_fwd * 100, 4)
+                    sofr_pct   = round(sofr_fwd * 100, 4)
+                else:
+                    usd_coupon = cop_coupon = ibr_pct = sofr_pct = None
 
             usd_net = round((-sign * (usd_coupon or 0.0)) + usd_principal, 2)
             cop_net = round((+sign * (cop_coupon or 0.0)) + cop_principal, 0)
 
             rows.append({
-                "period_num":    i,
-                "date_start":    ql_to_datetime(p_start).strftime("%Y-%m-%d"),
-                "date_end":      ql_to_datetime(p_end).strftime("%Y-%m-%d"),
-                "notional_usd":  N_usd,
-                "notional_cop":  N_cop,
-                "usd_coupon":    usd_coupon,
-                "cop_coupon":    cop_coupon,
-                "usd_principal": usd_principal,
-                "cop_principal": cop_principal,
-                "usd_net":       usd_net,
-                "cop_net":       cop_net,
-                "ibr_fwd_pct":   ibr_pct,
-                "sofr_fwd_pct":  sofr_pct,
-                "status":        status,
+                "period_num":        i,
+                "date_start":        p_start_str,
+                "date_end":          p_end_str,
+                "notional_usd":      N_usd,
+                "notional_cop":      N_cop,
+                "usd_coupon":        usd_coupon,
+                "cop_coupon":        cop_coupon,
+                "usd_principal":     usd_principal,
+                "cop_principal":     cop_principal,
+                "usd_net":           usd_net,
+                "cop_net":           cop_net,
+                "ibr_fwd_pct":       ibr_pct if status != "settled" else None,
+                "sofr_fwd_pct":      sofr_pct if status != "settled" else None,
+                "realized_sofr_pct": realized_sofr_pct,
+                "realized_ibr_pct":  realized_ibr_pct,
+                "status":            status,
             })
 
         return rows

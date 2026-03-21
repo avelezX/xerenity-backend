@@ -12,6 +12,8 @@ from fastapi import APIRouter, HTTPException
 
 from pricing.curves.curve_manager import CurveManager
 from pricing.data.market_data import MarketDataLoader
+from pricing.cashflows.fixing_repository import FixingRepository
+from pricing.cashflows.settled_flows_service import SettledFlowsService
 from pricing.instruments.ndf import NdfPricer
 from pricing.instruments.ibr_swap import IbrSwapPricer
 from pricing.instruments.tes_bond import TesBondPricer
@@ -24,11 +26,14 @@ from server.pricing_api.schemas import (
     NdfRequest,
     NdfResponse,
     IbrSwapRequest,
+    IbrSwapCashflowResponse,
     TesBondRequest,
     XccySwapRequest,
     XccySwapResponse,
     XccyCashflowResponse,
     RepricePortfolioRequest,
+    SettledFlowsRequest,
+    SettledFlowsResponse,
 )
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
@@ -36,6 +41,7 @@ router = APIRouter(prefix="/pricing", tags=["pricing"])
 # Singleton instances
 _cm: CurveManager | None = None
 _loader: MarketDataLoader | None = None
+_fixing_repo: FixingRepository | None = None
 
 
 def _get_cm() -> CurveManager:
@@ -50,6 +56,13 @@ def _get_loader() -> MarketDataLoader:
     if _loader is None:
         _loader = MarketDataLoader()
     return _loader
+
+
+def _get_fixing_repo() -> FixingRepository:
+    global _fixing_repo
+    if _fixing_repo is None:
+        _fixing_repo = FixingRepository()
+    return _fixing_repo
 
 
 def _ensure_curves_built():
@@ -332,7 +345,7 @@ def price_xccy_swap(req: XccySwapRequest):
 
 
 @router.post("/xccy-swap/cashflows", response_model=XccyCashflowResponse)
-def xccy_swap_cashflows(req: XccySwapRequest):
+def xccy_swap_cashflows(req: XccySwapRequest, with_realized: bool = False):
     """
     Full cashflow schedule for a USD/COP cross-currency swap.
 
@@ -340,14 +353,17 @@ def xccy_swap_cashflows(req: XccySwapRequest):
       - Period 0: inception notional exchange (pay USD / receive COP)
       - Periods 1..N: quarterly coupons + amortization returns
 
-    Settled period coupon estimates are None (realized rates not stored).
-    All other fields (notionals, principal flows) are deterministic from trade terms.
+    Query param `with_realized=true`: los períodos settled incluyen cupones
+    calculados con fixings históricos IBR/SOFR de Supabase (realized_ibr_pct,
+    realized_sofr_pct, usd_coupon, cop_coupon).
+    Sin el parámetro, los cupones de períodos settled son None.
     """
     _ensure_curves_built()
     cm = _get_cm()
     xccy = XccySwapPricer(cm)
 
     fx = req.fx_initial or cm.fx_spot
+    fixing_repo = _get_fixing_repo() if with_realized else None
     periods = xccy.cashflows(
         notional_usd=req.notional_usd,
         start_date=_parse_date(req.start_date),
@@ -360,6 +376,7 @@ def xccy_swap_cashflows(req: XccySwapRequest):
         amortization_type=req.amortization_type,
         amortization_schedule=req.amortization_schedule,
         payment_frequency=ql.Period(req.payment_frequency_months, ql.Months),
+        fixing_repo=fixing_repo,
     )
 
     return {
@@ -374,6 +391,170 @@ def xccy_swap_cashflows(req: XccySwapRequest):
         "n_periods":         len(periods) - 1,  # exclude inception row
         "periods":           periods,
     }
+
+
+# ── IBR OIS Cashflow Schedule ──
+
+
+@router.post("/ibr-swap/cashflows", response_model=IbrSwapCashflowResponse)
+def ibr_swap_cashflows(req: IbrSwapRequest, with_realized: bool = False):
+    """
+    Schedule completo de cashflows para un IBR OIS swap.
+
+    Retorna un período por cuota trimestral con cupón fijo, flotante y neto.
+
+    Query param `with_realized=true`: los períodos settled incluyen cupones
+    calculados con fixings históricos IBR de Supabase (realized_ibr_pct).
+    Sin el parámetro, los cupones de períodos settled son None.
+    """
+    _ensure_curves_built()
+    cm = _get_cm()
+    ibr = IbrSwapPricer(cm)
+
+    if req.tenor_years is not None:
+        tenor_or_mat = ql.Period(req.tenor_years, ql.Years)
+    elif req.maturity_date is not None:
+        tenor_or_mat = _parse_date(req.maturity_date)
+    else:
+        raise HTTPException(400, "Provide either tenor_years or maturity_date")
+
+    fixing_repo = _get_fixing_repo() if with_realized else None
+    periods = ibr.cashflows(
+        notional=req.notional,
+        tenor_or_maturity=tenor_or_mat,
+        fixed_rate=req.fixed_rate,
+        pay_fixed=req.pay_fixed,
+        spread=req.spread,
+        fixing_repo=fixing_repo,
+    )
+
+    # Derivar start_date y maturity_date del primer/último período
+    start_date_str = periods[0]["date_start"] if periods else ""
+    maturity_date_str = periods[-1]["date_end"] if periods else ""
+
+    return {
+        "notional": req.notional,
+        "start_date": start_date_str,
+        "maturity_date": maturity_date_str,
+        "fixed_rate_pct": round(req.fixed_rate * 100, 6),
+        "pay_fixed": req.pay_fixed,
+        "n_periods": len(periods),
+        "periods": periods,
+    }
+
+
+# ── Settled Flows Endpoint ──
+
+
+@router.post("/settled-flows", response_model=SettledFlowsResponse)
+def get_settled_flows(req: SettledFlowsRequest):
+    """
+    Calcula flujos netos liquidados de un instrumento entre dos fechas.
+
+    Genera el schedule completo del instrumento y filtra los períodos
+    cuyo date_end cae entre date_from y date_to (inclusive), luego
+    computa el compounding overnight de cada período con fixings históricos.
+
+    Útil para reconciliación contable, P&L realizado, y reporting.
+
+    instrument_type: 'xccy' | 'ibr_ois'
+
+    Para XCCY, instrument_params:
+        notional_usd, start_date, maturity_date, xccy_basis_bps (def 0),
+        pay_usd (def true), fx_initial (opcional), cop_spread_bps (def 0),
+        usd_spread_bps (def 0), amortization_type (def 'bullet'),
+        payment_frequency_months (def 3)
+
+    Para IBR OIS, instrument_params:
+        notional, fixed_rate (decimal), pay_fixed (def true), spread (def 0),
+        y uno de: tenor_years OR maturity_date
+    """
+    _ensure_curves_built()
+    cm = _get_cm()
+    fixing_repo = _get_fixing_repo()
+
+    if req.instrument_type == "xccy":
+        xccy = XccySwapPricer(cm)
+        p = req.instrument_params
+        try:
+            schedule = xccy.cashflows(
+                notional_usd=float(p["notional_usd"]),
+                start_date=_parse_date(p["start_date"]),
+                maturity_date=_parse_date(p["maturity_date"]),
+                xccy_basis_bps=float(p.get("xccy_basis_bps", 0.0)),
+                pay_usd=bool(p.get("pay_usd", True)),
+                fx_initial=float(p["fx_initial"]) if p.get("fx_initial") else None,
+                cop_spread_bps=float(p.get("cop_spread_bps", 0.0)),
+                usd_spread_bps=float(p.get("usd_spread_bps", 0.0)),
+                amortization_type=str(p.get("amortization_type", "bullet")),
+                amortization_schedule=p.get("amortization_schedule"),
+                payment_frequency=ql.Period(
+                    int(p.get("payment_frequency_months", 3)), ql.Months
+                ),
+                fixing_repo=None,  # Se calcula vía SettledFlowsService
+            )
+        except KeyError as e:
+            raise HTTPException(400, f"instrument_params faltante para xccy: {e}")
+
+        service = SettledFlowsService(fixing_repo)
+        result = service.settled_flows_between(
+            instrument_type="xccy",
+            instrument_params={
+                "notional_usd": float(p["notional_usd"]),
+                "notional_cop": float(p["notional_usd"]) * (
+                    float(p["fx_initial"]) if p.get("fx_initial") else cm.fx_spot
+                ),
+                "fx_initial": float(p["fx_initial"]) if p.get("fx_initial") else cm.fx_spot,
+                "usd_spread_bps": float(p.get("usd_spread_bps", 0.0)),
+                "cop_spread_bps": float(p.get("cop_spread_bps", 0.0)),
+                "xccy_basis_bps": float(p.get("xccy_basis_bps", 0.0)),
+                "pay_usd": bool(p.get("pay_usd", True)),
+            },
+            schedule=schedule,
+            T0=req.date_from,
+            T1=req.date_to,
+        )
+
+    elif req.instrument_type == "ibr_ois":
+        ibr = IbrSwapPricer(cm)
+        p = req.instrument_params
+        try:
+            if p.get("tenor_years") is not None:
+                tenor_or_mat = ql.Period(int(p["tenor_years"]), ql.Years)
+            elif p.get("maturity_date") is not None:
+                tenor_or_mat = _parse_date(p["maturity_date"])
+            else:
+                raise HTTPException(
+                    400, "instrument_params requiere 'tenor_years' o 'maturity_date' para ibr_ois"
+                )
+            schedule = ibr.cashflows(
+                notional=float(p["notional"]),
+                tenor_or_maturity=tenor_or_mat,
+                fixed_rate=float(p["fixed_rate"]),
+                pay_fixed=bool(p.get("pay_fixed", True)),
+                spread=float(p.get("spread", 0.0)),
+                fixing_repo=None,
+            )
+        except KeyError as e:
+            raise HTTPException(400, f"instrument_params faltante para ibr_ois: {e}")
+
+        service = SettledFlowsService(fixing_repo)
+        result = service.settled_flows_between(
+            instrument_type="ibr_ois",
+            instrument_params={
+                "notional": float(p["notional"]),
+                "fixed_rate_pct": float(p["fixed_rate"]) * 100.0,
+                "spread_bps": float(p.get("spread", 0.0)) * 10_000.0,
+                "pay_fixed": bool(p.get("pay_fixed", True)),
+            },
+            schedule=schedule,
+            T0=req.date_from,
+            T1=req.date_to,
+        )
+    else:
+        raise HTTPException(400, f"instrument_type inválido: '{req.instrument_type}'")
+
+    return result
 
 
 # ── Portfolio Repricing Endpoint ──
