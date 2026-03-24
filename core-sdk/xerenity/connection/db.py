@@ -185,11 +185,12 @@ class Connection:
                     grace_period: int = None,
                     min_period_rate: float = None,
                     loan_identifier: str = None,
+                    maturity_date: str = None,
+                    amortization_type: str = None,
                     ):
 
         try:
-
-            return self.supabase.rpc('create_credit', {
+            params = {
                 "start_date": start_date,
                 "bank": bank,
                 "number_of_payments": number_of_payments,
@@ -202,7 +203,14 @@ class Connection:
                 "grace_period": grace_period,
                 "min_period_rate": min_period_rate,
                 "loan_identifier": loan_identifier,
-            }).execute().data
+                "maturity_date": maturity_date,
+                "amortization_type": amortization_type,
+            }
+            # Remove None values so the RPC doesn't fail on columns
+            # that don't exist yet in the DB (backward compatible)
+            params = {k: v for k, v in params.items() if v is not None}
+
+            return self.supabase.rpc('create_credit', params).execute().data
 
         except Exception as er:
             return str(er)

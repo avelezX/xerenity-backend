@@ -1,243 +1,451 @@
+"""
+Loan Portfolio Analyzer.
+
+Aggregates a portfolio of loans (fija, IBR, UVR) and computes:
+  - Per-loan: NPV (market), principal outstanding, accrued interest, IRR, duration, tenor
+  - Per-bank: weighted averages of all metrics, broken down by loan type
+  - Portfolio: total NPV, DV01, weighted cost of debt, mark-to-market P&L
+
+Uses the new pricing infrastructure (IbrLoanPricer, FixedLoanPricer, UvrLoanPricer)
+with CurveManager for market-consistent discounting.
+
+Fallback: when CurveManager is not available (no curves built), falls back to
+the legacy LoanCalculatorServer + funciones_analisis_credito pipeline.
+"""
 import pandas as pd
-from datetime import datetime
-from server.loan_calculator.loan_calculator import LoanCalculatorServer
-from utilities.date_functions import datetime_to_ql, ql_to_datetime
-from loans_calculator.funciones_analisis_credito import create_cashflows_and_total_value
 import numpy as np
+from datetime import datetime
+from utilities.date_functions import datetime_to_ql, ql_to_datetime
+
+# Day count convention mapping (internal → IRR calculation convention)
+DAY_COUNT_MAP = {
+    'por_dias_360': '30/360',
+    'por_dias_365': 'actual/365',
+    'por_periodo': '30/360',  # default fallback for IRR calc
+}
 
 
 class LoanPortfolioAnalyzer:
-    def __init__(self, all_loan_data, filter_date):
-        self.bank_df = None
-        self.filter_date = filter_date
-        self.value_date_dt = None
+    """
+    Analyzes a portfolio of loans with market-consistent pricing.
+
+    Args:
+        all_loan_data: dict with keys:
+            - loans: list of loan dicts (id, owner, type, interest_rate, periodicity,
+              number_of_payments, start_date, original_balance, days_count,
+              grace_type, grace_period, min_period_rate, bank, loan_identifier)
+            - db_info: historical IBR/rate data for curve building
+            - db_info_uvr: historical UVR values
+            - filter_date: valuation date string 'YYYY-MM-DD'
+        filter_date: valuation date as string 'YYYY-MM-DD'
+        curve_manager: optional CurveManager instance (for NPV/DV01)
+    """
+
+    def __init__(self, all_loan_data, filter_date, curve_manager=None):
         self.all_loans_data = all_loan_data
-        self.results = {}
-        self.bank_data = {}
-        self.loan_ids_list = []
-        self.total_value_sum = 0
-        self.accrued_interest_sum = 0
-        self.total_loan_count = 0
-        self.total_average_irr = 0
-        self.total_average_duration = 0
-        self.total_average_tenor = 0
-        self.total_value_fija_sum = 0
-        self.total_value_ibr_sum = 0
-        self.total_average_tenor = 0
-        self.outdated_loan_count = 0
-        self.weighted_irr_fija_sum = 0
-        self.weighted_irr_ibr_sum = 0
-        self.weighted_irr_sum = 0
-        self.weighted_duration_sum = 0
-        self.weighted_tenor_sum = 0
-        self.total_weighted_irr_sum = 0
-        self.total_average_irr_fija = 0
-        self.total_average_irr_uvr = 0
-        self.total_value_ibr_sum = 0
-        self.total_value_uvr_sum = 0
-        self.weighted_irr_uvr_sum = 0
-        self.total_average_irr_ibr = 0
-        self.total_weighted_duration_sum = 0
-        self.not_calculated_loan_ids = []
-        self.not_calculated_loan_count = 0
-        self.total_weighted_tenor_sum = 0
-        self.db_info = None
+        self.filter_date = filter_date
+        self.cm = curve_manager
+
+        # Parsed dates
         self.value_date = None
+        self.value_date_dt = None
+
+        # Raw data
+        self.db_info = None
         self.db_info_uvr = None
 
+        # Results per loan
+        self.loan_results = []
+        self.failed_loans = []
+
+        # Aggregated results
+        self.bank_data = {}
+        self.portfolio_totals = {}
+
     def retrieve_data(self):
+        """Parse dates and extract db_info from input."""
         self.value_date = datetime_to_ql(datetime.strptime(self.filter_date, '%Y-%m-%d'))
-        self.value_date_dt = ql_to_datetime(self.value_date)
-        self.db_info = self.all_loans_data['db_info']
-        self.db_info_uvr = self.all_loans_data['db_info_uvr']
+        self.value_date_dt = datetime.strptime(self.filter_date, '%Y-%m-%d')
+        self.db_info = self.all_loans_data.get('db_info')
+        self.db_info_uvr = self.all_loans_data.get('db_info_uvr')
 
     def process_loans(self):
+        """
+        Process each loan: generate cashflows and compute analytics.
 
-        map_days_count = {
-            'por_dias_360': '30/360',
-            'por_dias_365': 'actual/365'
-        }
+        Uses new pricers (IbrLoanPricer, FixedLoanPricer, UvrLoanPricer) when
+        CurveManager is available. Falls back to legacy pipeline otherwise.
+        """
+        if self.cm is not None:
+            self._process_with_pricers()
+        else:
+            self._process_legacy()
+
+    def _process_with_pricers(self):
+        """Process loans using the new pricing infrastructure."""
+        from pricing.instruments.ibr_loan import IbrLoanPricer
+        from pricing.instruments.fixed_loan import FixedLoanPricer
+        from pricing.instruments.uvr_loan import UvrLoanPricer
+        from pricing.instruments.loan_utils import resolve_loan_params
+
+        ibr_pricer = IbrLoanPricer(self.cm)
+        fixed_pricer = FixedLoanPricer(self.cm)
+        uvr_pricer = UvrLoanPricer(self.cm)
 
         for i, loan in enumerate(self.all_loans_data['loans']):
-            # try:
-            loan_temp = loan.copy()
+            try:
+                # Resolve maturity_date and amortization_type (supports both new and legacy format)
+                resolved = resolve_loan_params(loan)
+                loan_type = loan.get('type', 'fija')
+                start_date = resolved['start_date_dt']
+                maturity_date = resolved['maturity_date_dt']
+                amort_type = resolved['amortization_type_resolved']
+                periodicity = loan['periodicity']
 
-            loan_payments = []
-            if loan_temp["type"] == 'uvr':
-                loan_temp['db_info'] = self.db_info_uvr
-                calc = LoanCalculatorServer(loan_temp, local_dev=True)
-                loan_payments = calc.cash_flow_uvr()
-            if loan_temp["type"] == 'fija':
-                loan_temp['db_info'] = self.db_info
-                calc = LoanCalculatorServer(loan_temp, local_dev=True)
-                loan_payments = calc.cash_flow()
-            elif loan_temp["type"] == 'ibr':
-                loan_temp['db_info'] = self.db_info
-                calc = LoanCalculatorServer(loan_temp, local_dev=True)
-                loan_payments = calc.cash_flow_ibr()
+                # Skip expired loans
+                if maturity_date <= self.value_date_dt:
+                    continue
 
-            variables = create_cashflows_and_total_value(
-                pd.DataFrame(loan_payments),
-                self.value_date,
-                datetime.strptime(loan['start_date'], '%Y-%m-%d'),
-                map_days_count.get(loan['days_count'], '30/360')
-            )
+                # Skip loans that haven't started yet
+                if start_date > self.value_date_dt:
+                    continue
 
-            loan_temp.pop('db_info', None)
-            self.results[f'loan_{i}'] = {
-                'variables': variables,
-                'loan_data': loan_temp
-            }
-        # except Exception as e:
-        #    print(e)
-        #    print('Error en la cargada de un credito, no se tendra en cuenta')
+                common_args = dict(
+                    notional=float(loan['original_balance']),
+                    start_date=start_date,
+                    maturity_date=maturity_date,
+                    periodicity=periodicity,
+                    days_count=loan.get('days_count', 'por_dias_360'),
+                    grace_type=loan.get('grace_type'),
+                    grace_period=int(loan.get('grace_period', 0) or 0),
+                )
+
+                if loan_type == 'ibr':
+                    result = ibr_pricer.price(
+                        spread_pct=float(loan['interest_rate']),
+                        amortization_type=amort_type,
+                        min_period_rate=float(loan['min_period_rate']) if loan.get('min_period_rate') else None,
+                        db_info=self.db_info,
+                        **common_args,
+                    )
+                    npv = result['npv']
+
+                elif loan_type == 'fija':
+                    result = fixed_pricer.price(
+                        rate_pct=float(loan['interest_rate']),
+                        amortization_type=amort_type,
+                        **common_args,
+                    )
+                    npv = result['npv']
+
+                elif loan_type == 'uvr':
+                    result = uvr_pricer.price(
+                        notional_uvr=float(loan['original_balance']),
+                        start_date=start_date,
+                        maturity_date=maturity_date,
+                        rate_pct=float(loan['interest_rate']),
+                        periodicity=periodicity,
+                        days_count=loan.get('days_count', 'por_dias_360'),
+                        amortization_type=amort_type,
+                        grace_type=loan.get('grace_type'),
+                        grace_period=int(loan.get('grace_period', 0) or 0),
+                        db_info=self.db_info_uvr,
+                    )
+                    npv = result['npv_cop']
+                else:
+                    self.failed_loans.append({
+                        'loan_id': loan.get('id'), 'reason': f"Unknown type: {loan_type}"
+                    })
+                    continue
+
+                self.loan_results.append({
+                    'loan_id': loan.get('id'),
+                    'loan_identifier': loan.get('loan_identifier'),
+                    'bank': loan.get('bank', 'Unknown'),
+                    'type': loan_type,
+                    'notional': float(loan['original_balance']),
+                    'npv': npv,
+                    'principal_outstanding': result.get('principal_outstanding',
+                                                         result.get('principal_outstanding_cop', 0)),
+                    'accrued_interest': result.get('accrued_interest',
+                                                    result.get('accrued_interest_cop', 0)),
+                    'total_value': result.get('total_value',
+                                              result.get('total_value_cop', 0)),
+                    'duration': result.get('duration', 0),
+                    'tenor_years': result.get('tenor_years', 0),
+                    'avg_rate_pct': result.get('avg_rate_pct', result.get('rate_pct', 0)),
+                    'periods_total': result.get('periods_total', 0),
+                    'periods_remaining': result.get('periods_remaining', 0),
+                })
+
+            except Exception as e:
+                self.failed_loans.append({
+                    'loan_id': loan.get('id'),
+                    'loan_identifier': loan.get('loan_identifier'),
+                    'reason': f"{type(e).__name__}: {e}",
+                })
+
+    def _process_legacy(self):
+        """Fallback: process loans using legacy LoanCalculatorServer."""
+        from server.loan_calculator.loan_calculator import LoanCalculatorServer
+        from loans_calculator.funciones_analisis_credito import create_cashflows_and_total_value
+
+        for i, loan in enumerate(self.all_loans_data['loans']):
+            try:
+                loan_temp = loan.copy()
+                loan_type = loan_temp.get('type', 'fija')
+
+                if loan_type == 'uvr':
+                    loan_temp['db_info'] = self.db_info_uvr
+                    calc = LoanCalculatorServer(loan_temp, local_dev=True)
+                    loan_payments = calc.cash_flow_uvr()
+                elif loan_type == 'fija':
+                    loan_temp['db_info'] = self.db_info
+                    calc = LoanCalculatorServer(loan_temp, local_dev=True)
+                    loan_payments = calc.cash_flow()
+                elif loan_type == 'ibr':
+                    loan_temp['db_info'] = self.db_info
+                    calc = LoanCalculatorServer(loan_temp, local_dev=True)
+                    loan_payments = calc.cash_flow_ibr()
+                else:
+                    self.failed_loans.append({
+                        'loan_id': loan.get('id'), 'reason': f"Unknown type: {loan_type}"
+                    })
+                    continue
+
+                start_date = datetime.strptime(loan['start_date'], '%Y-%m-%d')
+                convention = DAY_COUNT_MAP.get(loan.get('days_count', 'por_dias_360'), '30/360')
+
+                variables = create_cashflows_and_total_value(
+                    pd.DataFrame(loan_payments),
+                    self.value_date,
+                    start_date,
+                    convention,
+                )
+
+                total_value = variables.get('total_value', 0) or 0
+                accrued = variables.get('accrued_interest', 0) or 0
+                irr = variables.get('irr', 0) or 0
+                duration = variables.get('duration', 0) or 0
+                tenor = variables.get('tenor', 0) or 0
+                last_payment = variables.get('last_payment')
+
+                # Skip expired or not-yet-started loans
+                if last_payment is not None:
+                    last_dt = last_payment if isinstance(last_payment, datetime) else pd.Timestamp(last_payment).to_pydatetime()
+                    if last_dt <= self.value_date_dt:
+                        continue
+                if start_date > self.value_date_dt:
+                    continue
+
+                self.loan_results.append({
+                    'loan_id': loan.get('id'),
+                    'loan_identifier': loan.get('loan_identifier'),
+                    'bank': loan.get('bank', 'Unknown'),
+                    'type': loan_type,
+                    'notional': float(loan['original_balance']),
+                    'npv': None,  # Not available in legacy mode
+                    'principal_outstanding': total_value - accrued,
+                    'accrued_interest': accrued,
+                    'total_value': total_value,
+                    'duration': duration,
+                    'tenor_years': tenor,
+                    'avg_rate_pct': irr * 100 if irr else 0,
+                    'periods_total': 0,
+                    'periods_remaining': 0,
+                })
+
+            except Exception as e:
+                self.failed_loans.append({
+                    'loan_id': loan.get('id'),
+                    'loan_identifier': loan.get('loan_identifier'),
+                    'reason': f"{type(e).__name__}: {e}",
+                })
 
     def aggregate_data(self):
+        """
+        Aggregate loan results by bank and compute weighted averages.
 
-        for loan_id, loan_info in self.results.items():
-            total_value = loan_info['variables'].get('total_value')
-            accrued_interest = loan_info['variables'].get('accrued_interest')
-            irr = loan_info['variables'].get('irr')
-            duration = loan_info['variables'].get('duration')
-            tenor = loan_info['variables'].get('tenor')
-            last_payment = loan_info['variables'].get('last_payment')
-            start_date = loan_info['loan_data'].get('start_date')
-            bank = loan_info['loan_data'].get('bank')
-            loan_type = loan_info['loan_data'].get('type')
-            loan_id = loan_info['loan_data'].get('id')
+        Metrics computed per bank:
+          - total_value: sum of (principal_outstanding + accrued_interest)
+          - npv: sum of market NPV (None if legacy mode)
+          - weighted average: IRR, duration, tenor (weighted by total_value)
+          - breakdown by type: fija, ibr, uvr
+        """
+        for loan in self.loan_results:
+            bank = loan['bank'] or 'Unknown'
+            total_value = loan['total_value']
 
-            self.loan_ids_list.append(loan_id)
+            if total_value is None or np.isnan(total_value) or total_value <= 0:
+                self.failed_loans.append({
+                    'loan_id': loan['loan_id'],
+                    'reason': f"Invalid total_value: {total_value}",
+                })
+                continue
 
             if bank not in self.bank_data:
                 self.bank_data[bank] = {
-                    'total_value': 0,
-                    'weighted_irr_sum': 0,
+                    'total_value': 0, 'npv': 0,
                     'accrued_interest': 0,
-                    'weighted_duration_sum': 0,
+                    'weighted_rate_sum': 0, 'weighted_duration_sum': 0,
                     'weighted_tenor_sum': 0,
-                    'loan_count': 0,
-                    'outdated_loan_count': 0,
-                    'total_value_fija': 0,
-                    'weighted_irr_fija_sum': 0,
-                    'total_value_ibr': 0,
-                    'weighted_irr_ibr_sum': 0,
-                    'total_value_uvr': 0,
-                    'weighted_irr_uvr_sum': 0,
-                    'loan_ids': []
+                    'loan_count': 0, 'loan_ids': [],
+                    # By type
+                    'total_value_fija': 0, 'weighted_rate_fija_sum': 0,
+                    'total_value_ibr': 0, 'weighted_rate_ibr_sum': 0,
+                    'total_value_uvr': 0, 'weighted_rate_uvr_sum': 0,
                 }
 
-            if pd.isna(total_value) or pd.isna(accrued_interest) or pd.isna(irr) or pd.isna(duration) or pd.isna(tenor):
-                print(f"Warning: Missing data detected in loan {loan_id}:")
-                print(
-                    f"total_value={total_value}, accrued_interest={accrued_interest}, irr={irr}, duration={duration}, tenor={tenor}, bank={bank}")
-                self.not_calculated_loan_count += 1
-                continue
+            bd = self.bank_data[bank]
+            bd['total_value'] += total_value
+            bd['accrued_interest'] += loan['accrued_interest'] or 0
+            bd['weighted_rate_sum'] += (loan['avg_rate_pct'] or 0) * total_value
+            bd['weighted_duration_sum'] += (loan['duration'] or 0) * total_value
+            bd['weighted_tenor_sum'] += (loan['tenor_years'] or 0) * total_value
+            bd['loan_count'] += 1
+            bd['loan_ids'].append(loan['loan_id'])
 
-            if not (start_date < self.value_date_dt < last_payment):
-                self.outdated_loan_count += 1
-                continue
+            if loan['npv'] is not None:
+                bd['npv'] += loan['npv']
 
-            self.total_value_sum += total_value
-            self.accrued_interest_sum += accrued_interest
-            self.total_loan_count += 1
-
-            self.bank_data[bank]['total_value'] += total_value
-            self.bank_data[bank]['weighted_irr_sum'] += irr * total_value
-            self.bank_data[bank]['accrued_interest'] += accrued_interest
-            self.bank_data[bank]['weighted_duration_sum'] += duration * total_value
-            self.bank_data[bank]['weighted_tenor_sum'] += tenor * total_value
-            self.bank_data[bank]['loan_count'] += 1
-
+            loan_type = loan['type']
             if loan_type == 'fija':
-                self.total_value_fija_sum += total_value
-                self.bank_data[bank]['total_value_fija'] += total_value
-                self.bank_data[bank]['weighted_irr_fija_sum'] += irr * total_value
+                bd['total_value_fija'] += total_value
+                bd['weighted_rate_fija_sum'] += (loan['avg_rate_pct'] or 0) * total_value
             elif loan_type == 'ibr':
-                self.total_value_ibr_sum += total_value
-                self.bank_data[bank]['total_value_ibr'] += total_value
-                self.bank_data[bank]['weighted_irr_ibr_sum'] += irr * total_value
+                bd['total_value_ibr'] += total_value
+                bd['weighted_rate_ibr_sum'] += (loan['avg_rate_pct'] or 0) * total_value
             elif loan_type == 'uvr':
-                self.total_value_uvr_sum += total_value
-                self.bank_data[bank]['total_value_uvr'] += total_value
-                self.bank_data[bank]['weighted_irr_uvr_sum'] += irr * total_value
+                bd['total_value_uvr'] += total_value
+                bd['weighted_rate_uvr_sum'] += (loan['avg_rate_pct'] or 0) * total_value
 
-            self.bank_data[bank]['loan_ids'].append(loan_id)
-
-        # Assign the accumulated loan_ids_list after the loop
-
-        for bank, data in self.bank_data.items():
-            data['average_irr'] = data['weighted_irr_sum'] / data['total_value'] if data['total_value'] > 0 else None
-            data['average_duration'] = data['weighted_duration_sum'] / data['total_value'] if data[
-                                                                                                  'total_value'] > 0 else None
-            data['average_tenor'] = data['weighted_tenor_sum'] / data['total_value'] if data[
-                                                                                            'total_value'] > 0 else None
-            data['average_irr_fija'] = (data['weighted_irr_fija_sum'] / data['total_value_fija']
-                                        if data['total_value_fija'] > 0 else None)
-            data['average_irr_ibr'] = (data['weighted_irr_ibr_sum'] / data['total_value_ibr']
-                                       if data['total_value_ibr'] > 0 else None)
-
-            data['average_irr_uvr'] = (data['weighted_irr_uvr_sum'] / data['total_value_uvr']
-                                       if data['total_value_uvr'] > 0 else None)
+        # Compute weighted averages per bank
+        for bank, bd in self.bank_data.items():
+            tv = bd['total_value']
+            bd['avg_rate'] = bd['weighted_rate_sum'] / tv if tv > 0 else None
+            bd['avg_duration'] = bd['weighted_duration_sum'] / tv if tv > 0 else None
+            bd['avg_tenor'] = bd['weighted_tenor_sum'] / tv if tv > 0 else None
+            bd['avg_rate_fija'] = (bd['weighted_rate_fija_sum'] / bd['total_value_fija']
+                                   if bd['total_value_fija'] > 0 else None)
+            bd['avg_rate_ibr'] = (bd['weighted_rate_ibr_sum'] / bd['total_value_ibr']
+                                  if bd['total_value_ibr'] > 0 else None)
+            bd['avg_rate_uvr'] = (bd['weighted_rate_uvr_sum'] / bd['total_value_uvr']
+                                  if bd['total_value_uvr'] > 0 else None)
+            bd['mtm_pnl'] = bd['npv'] - bd['total_value'] if bd['npv'] else None
 
     def calculate_weighted_averages(self):
-        self.bank_df = pd.DataFrame.from_dict(self.bank_data, orient='index')
+        """Compute portfolio-level weighted averages across all banks."""
+        total_value = sum(bd['total_value'] for bd in self.bank_data.values())
+        total_npv = sum(bd['npv'] for bd in self.bank_data.values())
+        total_accrued = sum(bd['accrued_interest'] for bd in self.bank_data.values())
+        total_loans = sum(bd['loan_count'] for bd in self.bank_data.values())
 
-        self.total_value_sum = self.bank_df['total_value'].sum()
-        self.total_value_fija_sum = self.bank_df['total_value_fija'].sum()
-        self.total_value_ibr_sum = self.bank_df['total_value_ibr'].sum()
-        self.total_value_uvr_sum = self.bank_df['total_value_uvr'].sum()
+        total_value_fija = sum(bd['total_value_fija'] for bd in self.bank_data.values())
+        total_value_ibr = sum(bd['total_value_ibr'] for bd in self.bank_data.values())
+        total_value_uvr = sum(bd['total_value_uvr'] for bd in self.bank_data.values())
 
-        self.weighted_irr_fija_sum = self.bank_df['weighted_irr_fija_sum'].sum()
-        self.weighted_irr_ibr_sum = self.bank_df['weighted_irr_ibr_sum'].sum()
-        self.weighted_irr_uvr_sum = self.bank_df['weighted_irr_uvr_sum'].sum()
-        self.total_weighted_irr_sum = self.bank_df['weighted_irr_sum'].sum()
-        self.total_weighted_duration_sum = self.bank_df['weighted_duration_sum'].sum()
-        self.total_weighted_tenor_sum = self.bank_df['weighted_tenor_sum'].sum()
+        weighted_rate = sum(bd['weighted_rate_sum'] for bd in self.bank_data.values())
+        weighted_duration = sum(bd['weighted_duration_sum'] for bd in self.bank_data.values())
+        weighted_tenor = sum(bd['weighted_tenor_sum'] for bd in self.bank_data.values())
+        weighted_rate_fija = sum(bd['weighted_rate_fija_sum'] for bd in self.bank_data.values())
+        weighted_rate_ibr = sum(bd['weighted_rate_ibr_sum'] for bd in self.bank_data.values())
+        weighted_rate_uvr = sum(bd['weighted_rate_uvr_sum'] for bd in self.bank_data.values())
 
-        self.total_average_irr = (
-                self.total_weighted_irr_sum / self.total_value_sum) if self.total_value_sum > 0 else None
-        self.total_average_duration = (
-                self.total_weighted_duration_sum / self.total_value_sum) if self.total_value_sum > 0 else None
-        self.total_average_tenor = (
-                self.total_weighted_tenor_sum / self.total_value_sum) if self.total_value_sum > 0 else None
-        self.total_average_irr_fija = (
-                self.weighted_irr_fija_sum / self.total_value_fija_sum) if self.total_value_fija_sum > 0 else None
-        self.total_average_irr_ibr = (
-                self.weighted_irr_ibr_sum / self.total_value_ibr_sum) if self.total_value_ibr_sum > 0 else None
-        self.total_average_irr_uvr = (
-                self.weighted_irr_uvr_sum / self.total_value_uvr_sum) if self.total_value_uvr_sum > 0 else None
-
-        self.accrued_interest_sum = self.bank_df['accrued_interest'].sum()
+        self.portfolio_totals = {
+            'total_value': total_value,
+            'npv': total_npv,
+            'mtm_pnl': total_npv - total_value if total_npv else None,
+            'accrued_interest': total_accrued,
+            'loan_count': total_loans,
+            'failed_count': len(self.failed_loans),
+            'avg_rate': weighted_rate / total_value if total_value > 0 else None,
+            'avg_duration': weighted_duration / total_value if total_value > 0 else None,
+            'avg_tenor': weighted_tenor / total_value if total_value > 0 else None,
+            # By type
+            'total_value_fija': total_value_fija,
+            'total_value_ibr': total_value_ibr,
+            'total_value_uvr': total_value_uvr,
+            'avg_rate_fija': weighted_rate_fija / total_value_fija if total_value_fija > 0 else None,
+            'avg_rate_ibr': weighted_rate_ibr / total_value_ibr if total_value_ibr > 0 else None,
+            'avg_rate_uvr': weighted_rate_uvr / total_value_uvr if total_value_uvr > 0 else None,
+        }
 
     def get_final_dataframe(self):
+        """
+        Build summary DataFrame with one row per bank + totals row.
 
-        totals = pd.DataFrame.from_dict({
-            'total_value': [self.total_value_sum],
-            'accrued_interest': [self.accrued_interest_sum],
-            'weighted_irr_sum': [self.total_weighted_irr_sum],
-            'average_irr': [self.total_average_irr],
-            'average_duration': [self.total_average_duration],
-            'average_tenor': [self.total_average_tenor],
-            'loan_count': [self.total_loan_count],
-            'outdated_loan_count': [self.outdated_loan_count],
-            'total_value_fija': [self.total_value_fija_sum],
-            'average_irr_fija': [self.total_average_irr_fija],
-            'total_value_ibr': [self.total_value_ibr_sum],
-            'total_value_uvr': [self.total_value_uvr_sum],
-            'average_irr_uvr': [self.total_average_irr_uvr],
-            'average_irr_ibr': [self.total_average_irr_ibr],
-            'not_calculated_loan_count': [self.not_calculated_loan_count],
-            'loan_ids': [self.loan_ids_list]
+        Returns:
+            pd.DataFrame sorted by total_value descending
+        """
+        rows = []
+        for bank, bd in self.bank_data.items():
+            rows.append({
+                'bank': bank,
+                'total_value': bd['total_value'],
+                'npv': bd['npv'] or None,
+                'mtm_pnl': bd['mtm_pnl'],
+                'accrued_interest': bd['accrued_interest'],
+                'avg_rate': bd['avg_rate'],
+                'avg_duration': bd['avg_duration'],
+                'avg_tenor': bd['avg_tenor'],
+                'loan_count': bd['loan_count'],
+                'total_value_fija': bd['total_value_fija'],
+                'avg_rate_fija': bd['avg_rate_fija'],
+                'total_value_ibr': bd['total_value_ibr'],
+                'avg_rate_ibr': bd['avg_rate_ibr'],
+                'total_value_uvr': bd['total_value_uvr'],
+                'avg_rate_uvr': bd['avg_rate_uvr'],
+                'loan_ids': bd['loan_ids'],
+            })
+
+        # Totals row
+        t = self.portfolio_totals
+        rows.append({
+            'bank': 'TOTAL',
+            'total_value': t.get('total_value', 0),
+            'npv': t.get('npv'),
+            'mtm_pnl': t.get('mtm_pnl'),
+            'accrued_interest': t.get('accrued_interest', 0),
+            'avg_rate': t.get('avg_rate'),
+            'avg_duration': t.get('avg_duration'),
+            'avg_tenor': t.get('avg_tenor'),
+            'loan_count': t.get('loan_count', 0),
+            'total_value_fija': t.get('total_value_fija', 0),
+            'avg_rate_fija': t.get('avg_rate_fija'),
+            'total_value_ibr': t.get('total_value_ibr', 0),
+            'avg_rate_ibr': t.get('avg_rate_ibr'),
+            'total_value_uvr': t.get('total_value_uvr', 0),
+            'avg_rate_uvr': t.get('avg_rate_uvr'),
+            'loan_ids': [],
         })
 
-        final_df = pd.concat([self.bank_df, totals])
-        final_df = final_df[
-            ['total_value', 'accrued_interest', 'average_irr', 'average_duration', 'average_tenor', 'loan_count',
-             'outdated_loan_count', 'total_value_fija', 'average_irr_fija', 'total_value_ibr', 'average_irr_ibr',
-             'not_calculated_loan_count', 'loan_ids', 'total_value_uvr', 'average_irr_uvr']]
-        final_df.fillna(value=0, inplace=True)
+        df = pd.DataFrame(rows)
 
-        final_df = final_df.reset_index()
-        final_df.rename(columns={'index': 'bank'}, inplace=True)
+        # Output columns
+        cols = [
+            'bank', 'total_value', 'npv', 'mtm_pnl', 'accrued_interest',
+            'avg_rate', 'avg_duration', 'avg_tenor', 'loan_count',
+            'total_value_fija', 'avg_rate_fija',
+            'total_value_ibr', 'avg_rate_ibr',
+            'total_value_uvr', 'avg_rate_uvr',
+            'loan_ids',
+        ]
+        df = df[[c for c in cols if c in df.columns]]
+        df = df.fillna(0)
 
-        return final_df.sort_values(by='total_value', ascending=False)
+        # Sort banks by total_value, keep TOTAL at the bottom
+        bank_rows = df[df['bank'] != 'TOTAL'].sort_values('total_value', ascending=False)
+        total_row = df[df['bank'] == 'TOTAL']
+        return pd.concat([bank_rows, total_row], ignore_index=True)
+
+    def get_loan_details(self):
+        """Return per-loan results as a list of dicts."""
+        return self.loan_results
+
+    def get_failed_loans(self):
+        """Return list of loans that failed processing with reasons."""
+        return self.failed_loans
+
+    def get_portfolio_summary(self):
+        """Return portfolio-level summary dict."""
+        return self.portfolio_totals

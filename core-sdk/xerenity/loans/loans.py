@@ -27,22 +27,29 @@ class Loans:
                     grace_period: int = None,
                     min_period_rate: str = None,
                     loan_identifier: str = None,
+                    maturity_date: str = None,
+                    amortization_type: str = None,
                     ):
         """
-        Crea un credito en Xerenity
-        :param start_date:
-        :param bank:
-        :param number_of_payments:
-        :param original_balance:
-        :param periodicity:
-        :param interest_rate:
-        :param type:
-        :param days_count:
-        :param grace_type:
-        :param grace_period:
-        :param min_period_rate:
-        :param loan_identifier:
-        :return:
+        Crea un credito en Xerenity.
+
+        Args:
+            start_date: Fecha de desembolso (YYYY-MM-DD)
+            bank: Nombre del banco
+            number_of_payments: Número de pagos (usado si maturity_date es None)
+            original_balance: Saldo original
+            periodicity: Anual, Semestral, Trimestral, Bimensual, Mensual
+            interest_rate: Tasa nominal anual en % (para fija) o spread sobre IBR en % (para ibr)
+            type: 'fija', 'ibr', o 'uvr'
+            days_count: 'por_dias_360', 'por_dias_365', 'por_periodo'
+            grace_type: None, 'capital', 'interest', 'ambos'
+            grace_period: Número de períodos de gracia
+            min_period_rate: Tasa mínima del período en % (piso para IBR + spread)
+            loan_identifier: Identificador externo del crédito
+            maturity_date: Fecha de vencimiento (YYYY-MM-DD). Si se provee,
+                          tiene prioridad sobre number_of_payments para definir el schedule.
+            amortization_type: 'french', 'linear', 'bullet'. Si None, se infiere:
+                              fija/uvr → french, ibr → linear.
         """
         return self.con.create_loan(
             start_date=start_date,
@@ -56,7 +63,9 @@ class Loans:
             grace_period=grace_period,
             grace_type=grace_type,
             min_period_rate=min_period_rate,
-            loan_identifier=loan_identifier
+            loan_identifier=loan_identifier,
+            maturity_date=maturity_date,
+            amortization_type=amortization_type,
         )
 
     def create_from_file(self, file_dir):
