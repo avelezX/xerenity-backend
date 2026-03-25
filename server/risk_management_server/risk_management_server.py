@@ -13,6 +13,7 @@ class RiskManagementServer(XerenityFunctionServer):
                 code=400
             )
 
+        self.body = body
         self.filter_date = body['filter_date']
         self.portfolio_id = body.get('portfolio_id', None)
         self.mock = body.get('mock', False)
@@ -566,3 +567,195 @@ class RiskManagementServer(XerenityFunctionServer):
         result = calcular_exposicion_total(params)
         result['market_prices'] = market_prices
         return responseHttpOk(body=result)
+
+    # ── Futures Portfolio ──
+
+    def futures_portfolio(self):
+        """
+        Retorna el portafolio de futuros con P&L calculado.
+
+        Request body:
+            {
+                "filter_date": "2026-03-25",
+                "portfolio_id": "optional-uuid",
+                "active_only": true
+            }
+
+        Response:
+            {
+                "portfolio": [
+                    {
+                        "id": "uuid",
+                        "asset": "MAIZ",
+                        "contract": "ZCK26",
+                        "direction": "SHORT",
+                        "nominal": 5,
+                        "multiplier": 5000,
+                        "entry_price": 435.75,
+                        "current_price": 448.50,
+                        "valor_t": ...,
+                        "valor_t1": ...,
+                        "daily_pnl": ...,
+                        "pnl_inception": ...,
+                        "pnl_month": ...
+                    },
+                    ...
+                    {"asset": "Total", ...}
+                ]
+            }
+        """
+        from gestion_de_riesgos.db_risk import get_futures_portfolio, get_risk_prices
+        from gestion_de_riesgos.futures_portfolio import FuturesPortfolioCalculator
+        from datetime import datetime, timedelta
+
+        active_only = self.body.get('active_only', True)
+        positions = get_futures_portfolio(self.portfolio_id, active_only)
+
+        if not positions:
+            return responseHttpOk(body={'portfolio': []})
+
+        end_date = datetime.strptime(self.filter_date, '%Y-%m-%d')
+        start_date = end_date - timedelta(days=90)
+        prices_df = get_risk_prices(
+            initial_date=start_date.strftime('%Y-%m-%d'),
+            final_date=self.filter_date,
+        )
+
+        if prices_df.empty:
+            raise XerenityError(
+                message="No hay precios historicos disponibles",
+                code=404,
+            )
+
+        calc = FuturesPortfolioCalculator(positions, prices_df, self.filter_date)
+        result = calc.calculate()
+
+        return responseHttpOk(body={'portfolio': result})
+
+    def futures_portfolio_upsert(self):
+        """
+        Crea o actualiza posiciones de futuros.
+
+        Request body:
+            {
+                "filter_date": "2026-03-25",
+                "positions": [
+                    {
+                        "asset": "MAIZ",
+                        "contract": "ZCK26",
+                        "direction": "SHORT",
+                        "nominal": 5,
+                        "entry_price": 435.75,
+                        "entry_date": "2026-01-15"
+                    }
+                ]
+            }
+        """
+        from gestion_de_riesgos.db_risk import upsert_futures_positions
+
+        records = self.body.get('positions', [])
+        if not records:
+            raise XerenityError(message="Missing 'positions' in body", code=400)
+
+        upsert_futures_positions(records)
+        return responseHttpOk(body={'status': 'ok', 'count': len(records)})
+
+    def futures_portfolio_roll(self):
+        """
+        Ejecuta un roll de contrato: cierra posicion vieja y abre nueva.
+
+        Request body:
+            {
+                "filter_date": "2026-03-25",
+                "position_id": "uuid-of-old-position",
+                "new_contract": "ZCN26",
+                "roll_price": 450.25,
+                "new_entry_price": 452.00,
+                "roll_date": "2026-03-25"
+            }
+        """
+        from gestion_de_riesgos.db_risk import (
+            get_futures_position, close_futures_position, upsert_futures_positions,
+        )
+        from gestion_de_riesgos.futures_portfolio import FuturesPortfolioCalculator
+
+        position_id = self.body.get('position_id')
+        new_contract = self.body.get('new_contract')
+        roll_price = self.body.get('roll_price')
+        new_entry_price = self.body.get('new_entry_price', roll_price)
+        roll_date = self.body.get('roll_date', self.filter_date)
+
+        if not all([position_id, new_contract, roll_price]):
+            raise XerenityError(
+                message="Missing position_id, new_contract, or roll_price",
+                code=400,
+            )
+
+        old_position = get_futures_position(position_id)
+        if not old_position:
+            raise XerenityError(
+                message=f"Position {position_id} not found",
+                code=404,
+            )
+        if not old_position.get('active'):
+            raise XerenityError(
+                message="Cannot roll an inactive position",
+                code=400,
+            )
+
+        close_update, new_pos = FuturesPortfolioCalculator.execute_roll(
+            old_position, new_contract, roll_price, roll_date, new_entry_price,
+        )
+
+        close_futures_position(
+            position_id,
+            close_update['closed_date'],
+            close_update['closed_price'],
+            close_update['rolled_to'],
+        )
+        upsert_futures_positions([new_pos])
+
+        return responseHttpOk(body={
+            'status': 'rolled',
+            'closed_position_id': position_id,
+            'new_position': new_pos,
+        })
+
+    def futures_portfolio_close(self):
+        """
+        Cierra una posicion de futuros.
+
+        Request body:
+            {
+                "filter_date": "2026-03-25",
+                "position_id": "uuid",
+                "closed_price": 448.50,
+                "closed_date": "2026-03-25"
+            }
+        """
+        from gestion_de_riesgos.db_risk import get_futures_position, close_futures_position
+
+        position_id = self.body.get('position_id')
+        closed_price = self.body.get('closed_price')
+        closed_date = self.body.get('closed_date', self.filter_date)
+
+        if not all([position_id, closed_price]):
+            raise XerenityError(
+                message="Missing position_id or closed_price",
+                code=400,
+            )
+
+        old = get_futures_position(position_id)
+        if not old:
+            raise XerenityError(
+                message=f"Position {position_id} not found",
+                code=404,
+            )
+        if not old.get('active'):
+            raise XerenityError(
+                message="Position is already closed",
+                code=400,
+            )
+
+        close_futures_position(position_id, closed_date, closed_price)
+        return responseHttpOk(body={'status': 'closed', 'position_id': position_id})
