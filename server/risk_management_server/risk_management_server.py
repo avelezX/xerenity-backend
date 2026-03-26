@@ -759,3 +759,71 @@ class RiskManagementServer(XerenityFunctionServer):
 
         close_futures_position(position_id, closed_date, closed_price)
         return responseHttpOk(body={'status': 'closed', 'position_id': position_id})
+
+    def futures_portfolio_delete(self):
+        """
+        Elimina una posicion de futuros.
+
+        Request body:
+            {
+                "filter_date": "2026-03-26",
+                "position_id": "uuid"
+            }
+        """
+        from gestion_de_riesgos.db_risk import get_futures_position, delete_futures_position
+
+        position_id = self.body.get('position_id')
+        if not position_id:
+            raise XerenityError(message="Missing position_id", code=400)
+
+        old = get_futures_position(position_id)
+        if not old:
+            raise XerenityError(
+                message=f"Position {position_id} not found",
+                code=404,
+            )
+
+        delete_futures_position(position_id)
+        return responseHttpOk(body={'status': 'deleted', 'position_id': position_id})
+
+    def futures_portfolio_edit(self):
+        """
+        Edita campos de una posicion de futuros existente.
+
+        Request body:
+            {
+                "filter_date": "2026-03-26",
+                "position_id": "uuid",
+                "updates": {
+                    "nominal": 3,
+                    "entry_price": 450.00,
+                    "direction": "LONG",
+                    "contract": "ZCN26",
+                    "entry_date": "2026-03-01"
+                }
+            }
+        """
+        from gestion_de_riesgos.db_risk import get_futures_position, _patch
+
+        position_id = self.body.get('position_id')
+        updates = self.body.get('updates', {})
+
+        if not position_id:
+            raise XerenityError(message="Missing position_id", code=400)
+        if not updates:
+            raise XerenityError(message="Missing updates", code=400)
+
+        old = get_futures_position(position_id)
+        if not old:
+            raise XerenityError(
+                message=f"Position {position_id} not found",
+                code=404,
+            )
+
+        allowed = {'asset', 'contract', 'direction', 'nominal', 'entry_price', 'entry_date'}
+        payload = {k: v for k, v in updates.items() if k in allowed}
+        if not payload:
+            raise XerenityError(message="No valid fields to update", code=400)
+
+        _patch("risk_futures_portfolio", f"id=eq.{position_id}", payload)
+        return responseHttpOk(body={'status': 'updated', 'position_id': position_id, 'updated_fields': list(payload.keys())})

@@ -254,6 +254,28 @@ def risk_futures_portfolio_close(request):
         return responseHttpError(message=str(e), code=400)
 
 
+def risk_futures_portfolio_delete(request):
+    try:
+        from server.risk_management_server.risk_management_server import RiskManagementServer
+        calc = RiskManagementServer(json.loads(request.body))
+        return calc.futures_portfolio_delete()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
+def risk_futures_portfolio_edit(request):
+    try:
+        from server.risk_management_server.risk_management_server import RiskManagementServer
+        calc = RiskManagementServer(json.loads(request.body))
+        return calc.futures_portfolio_edit()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
 def wake_up(request):
     return responseHttpOk(body={"message": "Servidor de creditos activado"})
 
@@ -278,6 +300,8 @@ urlpatterns = [
     path("risk_futures_portfolio_upsert", csrf_exempt(risk_futures_portfolio_upsert), name="risk_futures_portfolio_upsert"),
     path("risk_futures_portfolio_roll", csrf_exempt(risk_futures_portfolio_roll), name="risk_futures_portfolio_roll"),
     path("risk_futures_portfolio_close", csrf_exempt(risk_futures_portfolio_close), name="risk_futures_portfolio_close"),
+    path("risk_futures_portfolio_delete", csrf_exempt(risk_futures_portfolio_delete), name="risk_futures_portfolio_delete"),
+    path("risk_futures_portfolio_edit", csrf_exempt(risk_futures_portfolio_edit), name="risk_futures_portfolio_edit"),
     # Pricing API
     path("pricing/curves/build", pricing_build, name="pricing_build"),
     path("pricing/curves/status", pricing_status, name="pricing_status"),

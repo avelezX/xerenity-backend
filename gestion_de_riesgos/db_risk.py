@@ -56,6 +56,12 @@ def _patch(table: str, filters: str, payload: dict) -> None:
     resp.raise_for_status()
 
 
+def _delete(table: str, filters: str) -> None:
+    s = _session()
+    resp = s.delete(f"{SUPABASE_URL}/rest/v1/{table}?{filters}")
+    resp.raise_for_status()
+
+
 # ── Risk Prices ──
 
 def _fetch_risk_prices_raw(initial_date: str, final_date: str) -> pd.DataFrame:
@@ -242,3 +248,8 @@ def close_futures_position(
     if rolled_to:
         payload["rolled_to"] = rolled_to
     _patch("risk_futures_portfolio", f"id=eq.{position_id}", payload)
+
+
+def delete_futures_position(position_id: str) -> None:
+    """Elimina una posicion de futuros por su ID."""
+    _delete("risk_futures_portfolio", f"id=eq.{position_id}")
