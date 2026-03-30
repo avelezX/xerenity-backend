@@ -144,136 +144,67 @@ def all_loans(request):
         return responseHttpError(message=str(e), code=400)
 
 
-def risk_management(request):
+def _risk_view(request, method_name):
+    """Helper para endpoints de riesgo: extrae auth y llama al metodo indicado."""
     try:
+        from server.auth import get_user_context
         from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.calculate()
+
+        user_ctx = get_user_context(request)
+        calc = RiskManagementServer(json.loads(request.body), user_context=user_ctx)
+        return getattr(calc, method_name)()
     except XerenityError as xerror:
         return responseHttpError(message=xerror.message, code=xerror.code)
     except Exception as e:
         return responseHttpError(message=str(e), code=400)
+
+
+def risk_management(request):
+    return _risk_view(request, 'calculate')
 
 
 def risk_rolling_var(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.rolling_var()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'rolling_var')
 
 
 def risk_benchmark_factors(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.benchmark_factors()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'benchmark_factors')
 
 
 def risk_exposure(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.exposure()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'exposure')
 
 
 def risk_collectors_status(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.collectors_status()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'collectors_status')
 
 
 def risk_update_prices(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.update_prices()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'update_prices')
 
 
 def risk_futures_portfolio(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio')
 
 
 def risk_futures_portfolio_upsert(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio_upsert()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio_upsert')
 
 
 def risk_futures_portfolio_roll(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio_roll()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio_roll')
 
 
 def risk_futures_portfolio_close(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio_close()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio_close')
 
 
 def risk_futures_portfolio_delete(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio_delete()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio_delete')
 
 
 def risk_futures_portfolio_edit(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.futures_portfolio_edit()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'futures_portfolio_edit')
 
 
 def wake_up(request):

@@ -146,7 +146,9 @@ curl -s -X POST http://localhost:8000/risk_benchmark_factors \
 - `POST /cash_flow` — flujo de caja de credito
 - `POST /all_loans` — portafolio de creditos
 
-Todos los endpoints de risk/loans requieren `{"filter_date": "YYYY-MM-DD"}` en el body.
+Todos los endpoints de risk requieren `Authorization: Bearer <supabase_jwt>` + `{"filter_date": "YYYY-MM-DD"}` en el body.
+Super admins pueden pasar `company_id` en el body para ver portafolios de otras empresas.
+Endpoints de pricing y loans NO requieren auth (pricing es stateless, loans usa Supabase RLS).
 
 ---
 
@@ -181,10 +183,54 @@ xerenity-db
 ```
 
 ### Patrones de comunicacion frontend → backend
-- **Pricing/Risk/Loans:** `fetch(NEXT_PUBLIC_PYSDK_URL + '/endpoint', {method: 'POST', body: JSON})`
+- **Risk endpoints:** `fetch(PYSDK_URL + '/risk_*', {headers: {'Authorization': 'Bearer <jwt>'}})` — requieren JWT
+- **Pricing endpoints:** `fetch(PYSDK_URL + '/pricing/*', {method: 'POST'})` — sin auth (calculadoras stateless)
+- **Loans endpoints:** `fetch(PYSDK_URL + '/all_loans')` — datos pre-filtrados por Supabase RLS
 - **Trading positions:** Supabase RPCs directos (`supabase.rpc('get_xccy_positions')`)
 - **Auth:** Supabase auth-helpers-nextjs (`createClientComponentClient()`)
 - **State:** Zustand stores (trading, loans, curve, user, series, dashboard)
+
+## Autenticacion y Multi-tenancy
+
+### Sistema de usuarios (creado por Andres Velez)
+- **Tabla:** `xerenity.user_profiles` — role, company_id, account_type
+- **Roles:** `super_admin > corp_admin > gestor > lector`
+- **Empresas:** `trading.company` — multi-tenancy por empresa
+- **RPCs:** `get_user_profile()`, `list_company_users()`, `invite_user()`, etc.
+
+### Auth en el backend (server/auth.py)
+- Lee `Authorization: Bearer <token>` del request
+- Decodifica JWT con `SUPABASE_JWT_SECRET` (HS256)
+- Consulta `user_profiles` para obtener `role` + `company_id`
+- Retorna user context: `{user_id, email, role, company_id, is_super_admin}`
+
+### Aislamiento por modulo
+
+| Modulo | Auth | Aislamiento | Mecanismo |
+|--------|------|-------------|-----------|
+| Risk (Commodities) | JWT en backend | Por `company_id` | `server/auth.py` + filtros en `db_risk.py` |
+| Creditos (Loans) | Supabase RLS | Por `user_id` (owner) | RPCs con `auth.uid()`, RLS en `loans.loan` |
+| Portafolio OTC | Supabase RLS | Por `company_id` | RPCs autenticados en trading schema |
+| Pricers (NDF, Swaps) | Sin auth | N/A | Calculadoras stateless, no guardan datos |
+| Precios de mercado | Sin auth | N/A | Datos globales compartidos (risk_prices) |
+
+### Tablas con company_id (multi-tenant)
+- `xerenity.risk_futures_portfolio` — posiciones de futuros
+- `xerenity.risk_positions` — posiciones benchmark/GR
+- `xerenity.risk_portfolio_config` — configuracion del portafolio
+
+### Tablas SIN company_id (datos globales)
+- `xerenity.risk_prices` — precios historicos de mercado (compartidos)
+
+### Logica de company_id en RiskManagementServer
+- **Sin auth (legacy):** no filtra por empresa
+- **Super admin:** puede pasar `company_id` en body para ver otros portafolios
+- **Otros roles:** siempre usan su propio `company_id` del perfil
+
+### Variables de entorno requeridas para auth
+```
+SUPABASE_JWT_SECRET=<jwt-secret-de-supabase-dashboard>
+```
 
 ## Estructura del monorepo
 ```
@@ -204,9 +250,10 @@ xerenity-backend/
 │   ├── futures_portfolio.py # Posiciones individuales de futuros
 │   └── exposure.py       #   Exposicion USD por commodity
 ├── server/               # Django API
+│   ├── auth.py           #   JWT auth helper (Supabase token → user context)
 │   ├── main_server.py    #   Base classes (XerenityError, responseHttpOk)
 │   ├── pricing_api/      #   Pricing endpoints (views.py, schemas.py)
-│   ├── risk_management_server/  # Risk endpoints
+│   ├── risk_management_server/  # Risk endpoints (multi-tenant via company_id)
 │   ├── loan_calculator/  #   Loan endpoints
 │   └── ...
 ├── src/                  # Modulos core (xerenity, collectors)

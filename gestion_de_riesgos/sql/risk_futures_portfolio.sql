@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS xerenity.risk_futures_portfolio (
     nominal         INTEGER NOT NULL,       -- Numero de contratos
     entry_price     NUMERIC NOT NULL,       -- Precio de compra/venta
     entry_date      DATE NOT NULL,          -- Fecha de entrada
+    company_id      UUID NOT NULL REFERENCES trading.company(id),  -- Empresa dueña
     portfolio_id    TEXT,                    -- Opcional, para multi-portafolio
     active          BOOLEAN DEFAULT TRUE,   -- Posicion abierta o cerrada
     closed_date     DATE,                   -- Fecha de cierre (si aplica)
@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS xerenity.risk_futures_portfolio (
 -- Constraint para upsert (merge-duplicates de Supabase REST)
 ALTER TABLE xerenity.risk_futures_portfolio
     ADD CONSTRAINT uq_futures_position
-    UNIQUE (asset, contract, entry_date, direction);
+    UNIQUE (company_id, asset, contract, entry_date, direction);
 
 -- Indices para queries frecuentes
 CREATE INDEX IF NOT EXISTS idx_futures_portfolio_active
@@ -29,6 +30,9 @@ CREATE INDEX IF NOT EXISTS idx_futures_portfolio_active
 
 CREATE INDEX IF NOT EXISTS idx_futures_portfolio_asset
     ON xerenity.risk_futures_portfolio (asset, active);
+
+CREATE INDEX IF NOT EXISTS idx_futures_portfolio_company
+    ON xerenity.risk_futures_portfolio (company_id, active);
 
 -- RLS: habilitar si se necesita control de acceso
 -- ALTER TABLE xerenity.risk_futures_portfolio ENABLE ROW LEVEL SECURITY;

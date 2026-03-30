@@ -3,7 +3,7 @@ from server.main_server import XerenityFunctionServer, XerenityError, responseHt
 
 class RiskManagementServer(XerenityFunctionServer):
 
-    def __init__(self, body):
+    def __init__(self, body, user_context=None):
         expected = {'filter_date': [str]}
 
         body_fields = set(expected).difference(body.keys())
@@ -19,6 +19,23 @@ class RiskManagementServer(XerenityFunctionServer):
         self.mock = body.get('mock', False)
         self.exposure_params = body.get('exposure_params', None)
         self.confidence_level = body.get('confidence_level', 0.99)
+        self.user_context = user_context
+        self.company_id = self._resolve_company_id()
+
+    def _resolve_company_id(self):
+        """
+        Determina el company_id a usar:
+        - Sin auth (legacy/dev): usa portfolio_id como fallback
+        - Super admin: puede pasar company_id en body para ver otros portafolios
+        - Otros roles: siempre usan su propio company_id
+        """
+        if not self.user_context:
+            return None  # legacy mode: sin filtro por empresa
+
+        if self.user_context['is_super_admin']:
+            return self.body.get('company_id') or self.user_context['company_id']
+
+        return self.user_context['company_id']
 
     def calculate(self):
         """
@@ -42,7 +59,7 @@ class RiskManagementServer(XerenityFunctionServer):
         from gestion_de_riesgos.portfolio import RiskPortfolio
         from datetime import datetime, timedelta
 
-        config = get_portfolio_config(self.portfolio_id)
+        config = get_portfolio_config(self.company_id, self.portfolio_id)
         price_date_start = config.get('price_date_start', self.filter_date)
         price_date_end = config.get('price_date_end', self.filter_date)
         rolling_window = config.get('rolling_window', 180)
@@ -61,7 +78,7 @@ class RiskManagementServer(XerenityFunctionServer):
                 code=404
             )
 
-        all_positions = get_risk_positions(self.portfolio_id)
+        all_positions = get_risk_positions(self.company_id, self.portfolio_id)
 
         benchmark_positions = [
             {'asset': p['asset'], 'position': p['position'], 'weight': p.get('weight', 0)}
@@ -609,7 +626,7 @@ class RiskManagementServer(XerenityFunctionServer):
         from datetime import datetime, timedelta
 
         active_only = self.body.get('active_only', True)
-        positions = get_futures_portfolio(self.portfolio_id, active_only)
+        positions = get_futures_portfolio(self.company_id, self.portfolio_id, active_only)
 
         if not positions:
             return responseHttpOk(body={'portfolio': []})
@@ -657,7 +674,7 @@ class RiskManagementServer(XerenityFunctionServer):
         if not records:
             raise XerenityError(message="Missing 'positions' in body", code=400)
 
-        upsert_futures_positions(records)
+        upsert_futures_positions(records, self.company_id)
         return responseHttpOk(body={'status': 'ok', 'count': len(records)})
 
     def futures_portfolio_roll(self):
@@ -691,7 +708,7 @@ class RiskManagementServer(XerenityFunctionServer):
                 code=400,
             )
 
-        old_position = get_futures_position(position_id)
+        old_position = get_futures_position(position_id, self.company_id)
         if not old_position:
             raise XerenityError(
                 message=f"Position {position_id} not found",
@@ -713,7 +730,7 @@ class RiskManagementServer(XerenityFunctionServer):
             close_update['closed_price'],
             close_update['rolled_to'],
         )
-        upsert_futures_positions([new_pos])
+        upsert_futures_positions([new_pos], self.company_id)
 
         return responseHttpOk(body={
             'status': 'rolled',
@@ -745,7 +762,7 @@ class RiskManagementServer(XerenityFunctionServer):
                 code=400,
             )
 
-        old = get_futures_position(position_id)
+        old = get_futures_position(position_id, self.company_id)
         if not old:
             raise XerenityError(
                 message=f"Position {position_id} not found",
@@ -776,7 +793,7 @@ class RiskManagementServer(XerenityFunctionServer):
         if not position_id:
             raise XerenityError(message="Missing position_id", code=400)
 
-        old = get_futures_position(position_id)
+        old = get_futures_position(position_id, self.company_id)
         if not old:
             raise XerenityError(
                 message=f"Position {position_id} not found",
@@ -813,7 +830,7 @@ class RiskManagementServer(XerenityFunctionServer):
         if not updates:
             raise XerenityError(message="Missing updates", code=400)
 
-        old = get_futures_position(position_id)
+        old = get_futures_position(position_id, self.company_id)
         if not old:
             raise XerenityError(
                 message=f"Position {position_id} not found",

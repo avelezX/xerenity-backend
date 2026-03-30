@@ -124,14 +124,20 @@ def get_risk_contracts(initial_date: str, final_date: str) -> dict:
 
 # ── Risk Positions ──
 
-def get_risk_positions(portfolio_id: str = None) -> list[dict]:
+def get_risk_positions(company_id: str = None, portfolio_id: str = None) -> list[dict]:
     """
     Obtiene las posiciones actuales (benchmark y GR).
+
+    Args:
+        company_id: UUID de la empresa (filtra por empresa)
+        portfolio_id: Filtrar por portafolio especifico
 
     Returns:
         Lista de dicts con: asset, position, position_type ('benchmark' o 'gr'), weight
     """
     params = "select=*&order=asset.asc"
+    if company_id:
+        params += f"&company_id=eq.{company_id}"
     if portfolio_id:
         params += f"&portfolio_id=eq.{portfolio_id}"
     data = _get("risk_positions", params)
@@ -140,14 +146,20 @@ def get_risk_positions(portfolio_id: str = None) -> list[dict]:
 
 # ── Portfolio Config ──
 
-def get_portfolio_config(portfolio_id: str = None) -> dict:
+def get_portfolio_config(company_id: str = None, portfolio_id: str = None) -> dict:
     """
     Obtiene la configuracion del portafolio de riesgos.
+
+    Args:
+        company_id: UUID de la empresa (filtra por empresa)
+        portfolio_id: Filtrar por portafolio especifico
 
     Returns:
         dict con: price_date_start, price_date_end, rolling_window, confidence_level
     """
     params = "select=*&limit=1"
+    if company_id:
+        params += f"&company_id=eq.{company_id}"
     if portfolio_id:
         params += f"&id=eq.{portfolio_id}"
     data = _get("risk_portfolio_config", params)
@@ -166,13 +178,17 @@ def upsert_risk_prices(records: list[dict]) -> None:
     _post("risk_prices", records, {"Prefer": "resolution=merge-duplicates"})
 
 
-def upsert_risk_positions(records: list[dict]) -> None:
+def upsert_risk_positions(records: list[dict], company_id: str = None) -> None:
     """
     Inserta o actualiza posiciones en la tabla risk_positions.
 
     Args:
         records: Lista de dicts con: asset, position, position_type, weight, portfolio_id
+        company_id: UUID de la empresa — se inyecta en cada record
     """
+    if company_id:
+        for r in records:
+            r["company_id"] = company_id
     _post("risk_positions", records, {"Prefer": "resolution=merge-duplicates"})
 
 
@@ -194,11 +210,12 @@ def get_latest_prices() -> dict:
 
 # ── Futures Portfolio (posiciones individuales GR) ──
 
-def get_futures_portfolio(portfolio_id: str = None, active_only: bool = True) -> list[dict]:
+def get_futures_portfolio(company_id: str = None, portfolio_id: str = None, active_only: bool = True) -> list[dict]:
     """
     Obtiene las posiciones individuales de futuros.
 
     Args:
+        company_id: UUID de la empresa (filtra por empresa)
         portfolio_id: Filtrar por portafolio especifico
         active_only: Solo posiciones activas (default True)
 
@@ -209,19 +226,37 @@ def get_futures_portfolio(portfolio_id: str = None, active_only: bool = True) ->
     params = "select=*&order=entry_date.desc"
     if active_only:
         params += "&active=eq.true"
+    if company_id:
+        params += f"&company_id=eq.{company_id}"
     if portfolio_id:
         params += f"&portfolio_id=eq.{portfolio_id}"
     return _get("risk_futures_portfolio", params) or []
 
 
-def get_futures_position(position_id: str) -> dict:
-    """Obtiene una posicion individual por su ID."""
-    data = _get("risk_futures_portfolio", f"select=*&id=eq.{position_id}")
+def get_futures_position(position_id: str, company_id: str = None) -> dict:
+    """Obtiene una posicion individual por su ID.
+
+    Args:
+        position_id: UUID de la posicion
+        company_id: Si se pasa, valida que la posicion pertenezca a la empresa
+    """
+    params = f"select=*&id=eq.{position_id}"
+    if company_id:
+        params += f"&company_id=eq.{company_id}"
+    data = _get("risk_futures_portfolio", params)
     return data[0] if data else {}
 
 
-def upsert_futures_positions(records: list[dict]) -> None:
-    """Inserta o actualiza posiciones de futuros."""
+def upsert_futures_positions(records: list[dict], company_id: str = None) -> None:
+    """Inserta o actualiza posiciones de futuros.
+
+    Args:
+        records: Lista de dicts con campos de posicion
+        company_id: UUID de la empresa — se inyecta en cada record
+    """
+    if company_id:
+        for r in records:
+            r["company_id"] = company_id
     _post("risk_futures_portfolio", records, {"Prefer": "resolution=merge-duplicates"})
 
 
