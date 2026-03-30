@@ -144,70 +144,67 @@ def all_loans(request):
         return responseHttpError(message=str(e), code=400)
 
 
-def risk_management(request):
+def _risk_view(request, method_name):
+    """Helper para endpoints de riesgo: extrae auth y llama al metodo indicado."""
     try:
+        from server.auth import get_user_context
         from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.calculate()
+
+        user_ctx = get_user_context(request)
+        calc = RiskManagementServer(json.loads(request.body), user_context=user_ctx)
+        return getattr(calc, method_name)()
     except XerenityError as xerror:
         return responseHttpError(message=xerror.message, code=xerror.code)
     except Exception as e:
         return responseHttpError(message=str(e), code=400)
+
+
+def risk_management(request):
+    return _risk_view(request, 'calculate')
 
 
 def risk_rolling_var(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.rolling_var()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'rolling_var')
 
 
 def risk_benchmark_factors(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.benchmark_factors()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'benchmark_factors')
 
 
 def risk_exposure(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.exposure()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'exposure')
 
 
 def risk_collectors_status(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.collectors_status()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'collectors_status')
 
 
 def risk_update_prices(request):
-    try:
-        from server.risk_management_server.risk_management_server import RiskManagementServer
-        calc = RiskManagementServer(json.loads(request.body))
-        return calc.update_prices()
-    except XerenityError as xerror:
-        return responseHttpError(message=xerror.message, code=xerror.code)
-    except Exception as e:
-        return responseHttpError(message=str(e), code=400)
+    return _risk_view(request, 'update_prices')
+
+
+def risk_futures_portfolio(request):
+    return _risk_view(request, 'futures_portfolio')
+
+
+def risk_futures_portfolio_upsert(request):
+    return _risk_view(request, 'futures_portfolio_upsert')
+
+
+def risk_futures_portfolio_roll(request):
+    return _risk_view(request, 'futures_portfolio_roll')
+
+
+def risk_futures_portfolio_close(request):
+    return _risk_view(request, 'futures_portfolio_close')
+
+
+def risk_futures_portfolio_delete(request):
+    return _risk_view(request, 'futures_portfolio_delete')
+
+
+def risk_futures_portfolio_edit(request):
+    return _risk_view(request, 'futures_portfolio_edit')
 
 
 def wake_up(request):
@@ -230,6 +227,12 @@ urlpatterns = [
     path("risk_exposure", csrf_exempt(risk_exposure), name="risk_exposure"),
     path("risk_collectors_status", csrf_exempt(risk_collectors_status), name="risk_collectors_status"),
     path("risk_update_prices", csrf_exempt(risk_update_prices), name="risk_update_prices"),
+    path("risk_futures_portfolio", csrf_exempt(risk_futures_portfolio), name="risk_futures_portfolio"),
+    path("risk_futures_portfolio_upsert", csrf_exempt(risk_futures_portfolio_upsert), name="risk_futures_portfolio_upsert"),
+    path("risk_futures_portfolio_roll", csrf_exempt(risk_futures_portfolio_roll), name="risk_futures_portfolio_roll"),
+    path("risk_futures_portfolio_close", csrf_exempt(risk_futures_portfolio_close), name="risk_futures_portfolio_close"),
+    path("risk_futures_portfolio_delete", csrf_exempt(risk_futures_portfolio_delete), name="risk_futures_portfolio_delete"),
+    path("risk_futures_portfolio_edit", csrf_exempt(risk_futures_portfolio_edit), name="risk_futures_portfolio_edit"),
     # Pricing API
     path("pricing/curves/build", pricing_build, name="pricing_build"),
     path("pricing/curves/status", pricing_status, name="pricing_status"),
