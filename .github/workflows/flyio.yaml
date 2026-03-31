@@ -2,7 +2,8 @@ name: Fly Deploy
 on:
   push:
     branches:
-      - main    # change to main if needed
+      - main
+  workflow_dispatch:  # allow manual trigger from GitHub UI
 jobs:
   deploy:
     name: Deploy app
