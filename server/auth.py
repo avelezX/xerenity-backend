@@ -84,29 +84,28 @@ def _fetch_user_profile(user_id: str) -> dict:
     return data[0]
 
 
-def get_user_context(request) -> dict:
+def get_user_context(request) -> dict | None:
     """
     Extract and validate user context from a Django request.
 
     Reads the Authorization header, decodes the Supabase JWT,
     and fetches the user's role and company_id from user_profiles.
 
+    Returns None if no Authorization header is present (graceful fallback).
+    When token IS present, validates it strictly.
+
     Args:
         request: Django HttpRequest
 
     Returns:
         dict with user_id, email, role, company_id, is_super_admin
-
-    Raises:
-        XerenityError(401) if token is missing or invalid
-        XerenityError(403) if user profile not found
+        or None if no auth header present
     """
     auth_header = request.META.get("HTTP_AUTHORIZATION", "")
     if not auth_header.startswith("Bearer "):
-        raise XerenityError(
-            message="Authorization header required. Send Bearer <supabase_token>",
-            code=401,
-        )
+        # No auth header — allow request without user context
+        # The frontend login wall (Next.js middleware) is the first line of defense
+        return None
 
     token = auth_header[7:]  # Strip "Bearer "
     payload = _decode_token(token)
