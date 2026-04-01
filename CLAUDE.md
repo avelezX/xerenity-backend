@@ -198,38 +198,101 @@ xerenity-db
 - **Empresas:** `trading.company` — multi-tenancy por empresa
 - **RPCs:** `get_user_profile()`, `list_company_users()`, `invite_user()`, etc.
 
-### Auth en el backend (server/auth.py)
-- Lee `Authorization: Bearer <token>` del request
-- Decodifica JWT con `SUPABASE_JWT_SECRET` (HS256)
-- Consulta `user_profiles` para obtener `role` + `company_id`
-- Retorna user context: `{user_id, email, role, company_id, is_super_admin}`
+### Control de acceso por modulo
 
-### Aislamiento por modulo
+| Seccion | Roles permitidos | Mecanismo |
+|---------|-----------------|-----------|
+| Riesgos (Commodities) | `super_admin`, `corp_admin` | `RoleGuard` + sidebar condicional |
+| Creditos (Loans) | Todos los logueados | Supabase RLS por `user_id` |
+| Pricing (NDF, Swaps) | Todos los logueados | Calculadoras stateless |
+| Usuarios | `super_admin`, `corp_admin` | `RoleGuard` |
+| Admin | `super_admin` | `RoleGuard` |
 
-| Modulo | Auth | Aislamiento | Mecanismo |
-|--------|------|-------------|-----------|
-| Risk (Commodities) | JWT en backend | Por `company_id` | `server/auth.py` + filtros en `db_risk.py` |
-| Creditos (Loans) | Supabase RLS | Por `user_id` (owner) | RPCs con `auth.uid()`, RLS en `loans.loan` |
-| Portafolio OTC | Supabase RLS | Por `company_id` | RPCs autenticados en trading schema |
-| Pricers (NDF, Swaps) | Sin auth | N/A | Calculadoras stateless, no guardan datos |
-| Precios de mercado | Sin auth | N/A | Datos globales compartidos (risk_prices) |
+### Aislamiento de datos por modulo
 
-### Tablas con company_id (multi-tenant)
-- `xerenity.risk_futures_portfolio` — posiciones de futuros
-- `xerenity.risk_positions` — posiciones benchmark/GR
-- `xerenity.risk_portfolio_config` — configuracion del portafolio
+| Modulo | Aislamiento | Mecanismo |
+|--------|-------------|-----------|
+| Risk (Commodities) | Por `company_id` | Frontend lee Supabase directo, filtra por empresa |
+| Creditos (Loans) | Por `user_id` (owner) | RPCs con `auth.uid()`, RLS en `loans.loan` |
+| Portafolio OTC | Por `company_id` | RPCs autenticados en trading schema |
+| Pricers (NDF, Swaps) | N/A | Calculadoras stateless, no guardan datos |
+| Precios de mercado | N/A | Datos globales compartidos (risk_prices) |
 
-### Tablas SIN company_id (datos globales)
-- `xerenity.risk_prices` — precios historicos de mercado (compartidos)
+### Arquitectura del modulo de Commodities (migrado abril 2026)
 
-### Logica de company_id en RiskManagementServer
-- **Sin auth (legacy):** no filtra por empresa
-- **Super admin:** puede pasar `company_id` en body para ver otros portafolios
-- **Otros roles:** siempre usan su propio `company_id` del perfil
+**ANTES:** Frontend → Fly.io (Python) → Supabase
+**AHORA:** Frontend → Supabase (directo) → Frontend (calcula en TS)
 
-### Variables de entorno requeridas para auth
+El modulo de Commodities ya NO depende de Fly.io. Los calculos se hacen en el frontend:
+
+| Archivo frontend | Funcion |
+|-----------------|---------|
+| `src/lib/risk/supabaseRisk.ts` | Queries directas a Supabase (risk_prices, positions, futures) |
+| `src/lib/risk/varCalculator.ts` | Motor VaR: log returns, rolling std, z-scores, covarianza |
+| `src/lib/risk/exposureCalculator.ts` | Exposicion USD por commodity |
+| `src/lib/risk/futuresCalculator.ts` | P&L de futuros con multiplicadores de contrato |
+| `src/lib/risk/companyConfig.ts` | Configuracion dinamica por empresa |
+| `src/models/risk/riskApi.ts` | API client que orquesta queries + calculos |
+
+### Configuracion por empresa (risk_company_config)
+
+Cada empresa configura sus propios commodities via `xerenity.risk_company_config`:
+
+```json
+{
+  "company_id": "uuid",
+  "commodities": [
+    {"asset": "MAIZ", "unit": "TONS", "price_unit": "cents/bu", "contract_multiplier": 5000, "chart_color": "#f59e0b", "exchange": "CME", "symbol": "ZC"},
+    {"asset": "AZUCAR", ...},
+    {"asset": "CACAO", ...}
+  ],
+  "exposure_defaults": { ... },
+  "rolling_window": 180,
+  "confidence_level": 0.99
+}
 ```
-SUPABASE_JWT_SECRET=<jwt-secret-de-supabase-dashboard>
+
+- **Super admin sin empresa:** ve selector para elegir empresa
+- **Corp admin con config:** ve su modulo completo
+- **Corp admin sin config:** ve pantalla de setup para seleccionar commodities
+- **Gestor/lector:** no tienen acceso a Riesgos
+
+### Tablas de riesgo en Supabase
+
+| Tabla | Scope | company_id |
+|-------|-------|-----------|
+| `risk_prices` | Global | No |
+| `risk_positions` | Per-company | Si |
+| `risk_futures_portfolio` | Per-company | Si |
+| `risk_portfolio_config` | Per-company | Si |
+| `risk_company_config` | Per-company | Si (UNIQUE) |
+
+### Sidebar consolidado (abril 2026)
+
+```
+Riesgos (solo super_admin y corp_admin)
+  ├── Commodities        → /risk-management
+  ├── Creditos           → /loans
+  ├── Portafolio OTC     → /portfolio
+  ├── NDF Pricer         → /ndf-pricer
+  ├── IBR Swap           → /ibr-swap
+  ├── XCCY Swap          → /xccy-swap
+  ├── COLTES             → /coltes-calculator
+  └── Portafolio TES     → /tes-portfolio
+```
+
+### Deploy
+
+| Servicio | Plataforma | Trigger |
+|----------|-----------|---------|
+| Frontend (xerenity-fe) | Vercel | Auto-deploy on merge to main |
+| Backend (xerenity-backend) | Fly.io | GitHub Actions on merge to main (`--no-cache`) |
+| Base de datos | Supabase | Migraciones manuales en SQL Editor |
+
+### Variables de entorno requeridas
+```
+SUPABASE_JWT_SECRET=<jwt-secret-de-supabase-dashboard>  # Para auth en backend
+FLY_API_TOKEN=<fly-deploy-token>                         # Secret en GitHub para CI/CD
 ```
 
 ## Estructura del monorepo
