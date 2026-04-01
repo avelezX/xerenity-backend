@@ -208,7 +208,7 @@ def risk_futures_portfolio_edit(request):
 
 
 def wake_up(request):
-    return responseHttpOk(body={"message": "Servidor de creditos activado"})
+    return responseHttpOk(body={"message": "Servidor de creditos activado", "version": "2026-04-01-auth-optional"})
 
 
 urlpatterns = [
