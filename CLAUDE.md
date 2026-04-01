@@ -232,6 +232,7 @@ El modulo de Commodities ya NO depende de Fly.io. Los calculos se hacen en el fr
 | `src/lib/risk/exposureCalculator.ts` | Exposicion USD por commodity |
 | `src/lib/risk/futuresCalculator.ts` | P&L de futuros con multiplicadores de contrato |
 | `src/lib/risk/companyConfig.ts` | Configuracion dinamica por empresa |
+| `src/lib/risk/resumenCalculator.ts` | Tab Resumen: consolida 4 secciones del portafolio |
 | `src/models/risk/riskApi.ts` | API client que orquesta queries + calculos |
 
 ### Configuracion por empresa (risk_company_config)
@@ -256,6 +257,23 @@ Cada empresa configura sus propios commodities via `xerenity.risk_company_config
 - **Corp admin con config:** ve su modulo completo
 - **Corp admin sin config:** ve pantalla de setup para seleccionar commodities
 - **Gestor/lector:** no tienen acceso a Riesgos
+
+### Tab Resumen (dashboard consolidado, abril 2026)
+
+Vista por defecto al entrar a Commodities. Consolida las 4 secciones del portafolio:
+
+| Seccion | Fuente de datos | Campos |
+|---------|----------------|--------|
+| Commodities (Futuros) | `fetchFuturesPortfolio()` → Supabase | valor_t, pnl_month, # posiciones |
+| Derivados OTC | Supabase RPCs (`get_xccy/ndf/ibr_positions`) | notional, # posiciones |
+| Creditos | Zustand store (`fullLoan`) | total_value, accrued_interest |
+| Portafolio TES | Zustand store (`pricedTesBonds`) | npv, pnl_mtm |
+
+**Layout:** 4 KPI cards arriba + tabla consolidada con sub-rows por seccion + fila de totales.
+**Navegacion:** Por mes (mismo patron que Benchmark).
+**Sin Fly.io:** Todo desde frontend (Supabase + Zustand stores).
+
+Labels renombrados en Benchmark: "Exposicion Natural" (antes "Super USD").
 
 ### Tablas de riesgo en Supabase
 
