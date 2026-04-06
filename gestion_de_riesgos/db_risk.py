@@ -168,6 +168,27 @@ def get_portfolio_config(company_id: str = None, portfolio_id: str = None) -> di
 
 # ── Upserts ──
 
+def upsert_all_contracts_prices(records: list[dict]) -> None:
+    """
+    Inserta o actualiza precios de TODOS los contratos en risk_prices_all_contracts.
+
+    Args:
+        records: Lista de dicts con: date, asset, contract, close (open/high/low/volume opcionales)
+    """
+    if not records:
+        return
+    # Upsert in batches of 500 to avoid Supabase REST size limits
+    # on_conflict points to the unique constraint columns
+    batch_size = 500
+    for i in range(0, len(records), batch_size):
+        batch = records[i:i + batch_size]
+        s = _session()
+        s.headers.update({"Prefer": "resolution=merge-duplicates"})
+        url = f"{SUPABASE_URL}/rest/v1/risk_prices_all_contracts?on_conflict=date,asset,contract"
+        resp = s.post(url, json=batch)
+        resp.raise_for_status()
+
+
 def upsert_risk_prices(records: list[dict]) -> None:
     """
     Inserta o actualiza precios historicos en la tabla risk_prices.
