@@ -275,11 +275,13 @@ Vista por defecto al entrar a Commodities. Consolida 3 secciones:
 | Seccion | Fuente de datos | Campos |
 |---------|----------------|--------|
 | Commodities | `benchmarkRows` (estado del Benchmark) | Posiciones por activo (Exp. Natural, GR, Total) + P&G |
-| Derivados OTC | Supabase RPCs + store summary (post-reprice) | NPV COP/USD, Carry COP, P&L Tasas/FX, Spot |
+| Derivados OTC | `pricedXccy`/`pricedNdf` + `summary` + `refPrices.mtd` (trading store) | NPV COP, NPV USD, FX Delta, P&L MTD COP, P&L MTD USD |
 | Creditos | Supabase RPC `get_loans` directo | # creditos, deuda total, IBR vs Tasa Fija |
 
 **Sincronizacion:** El Resumen lee `benchmarkRows` directamente, asi que refleja los mismos valores que el Benchmark al cambiar de mes.
-**Layout:** Commodities = tabla por activo, OTC = 6 KPI cards, Creditos = 4 cards.
+**Layout:** Commodities = tabla por activo, OTC = 5 KPI cards, Creditos = 4 cards.
+**FX Delta:** suma de `fx_delta` de `pricedXccy` + `pricedNdf` (con su signo).
+**P&L MTD:** `summary.total_npv_* − refPrices.mtd.summary.total_npv_*` (requiere haber repricado en /portfolio).
 **Auto-load:** Todos los tabs cargan automaticamente al entrar (sin boton Actualizar).
 **Formato:** `fmtCompact()` muestra valores como $13.4M, $453K, $15.
 **Sin Fly.io:** Todo desde frontend (Supabase directo).
@@ -299,13 +301,21 @@ Posiciones individuales de futuros con P&L:
 - Subtotales por activo en la tabla (Total MAIZ, Total AZUCAR, etc.)
 - `futuresMonth` sincronizado con `benchmarkMonth` (ambas vistas muestran el mismo periodo)
 
-### Auto-llenado del Benchmark desde Portafolio GR
+### Auto-llenado del Benchmark desde Portafolio GR y OTC
 
 `position_gr` y `pnl_gr` del Benchmark se llenan automaticamente:
+
+**Filas MAIZ / AZUCAR / CACAO** (desde `risk_futures_portfolio`):
 - `position_gr` = sum(Valor Compra) por activo del Portafolio GR
 - `pnl_gr` = sum((price_end - price_start) × multiplier × nominal × dirSign × toUsd)
-- Se recalcula al cambiar el mes del Benchmark
+
+**Fila USD** (desde el store de trading OTC):
+- `position_gr` = sum de `fx_delta` de `pricedXccy` + `pricedNdf`
+- `pnl_gr` = `summary.total_npv_usd − refPrices.mtd.summary.total_npv_usd`
+
+- Se recalcula al cambiar el mes del Benchmark o al repricar OTC
 - Read-only en la UI (ya no se editan manualmente)
+- Celdas vacias se inicializan en `'0'` para que la fila Total sume todas las filas correctamente
 
 ### Tablas de riesgo en Supabase
 
