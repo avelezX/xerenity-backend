@@ -25,7 +25,8 @@ class Loan:
                  grace_type=None,
                  grace_period=None,
                  db_info=None,
-                 min_period_rate=None):
+                 min_period_rate=None,
+                 **kwargs):
         """
         Generates cash flow table with IBR rates.
         
