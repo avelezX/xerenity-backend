@@ -270,30 +270,79 @@ Cada empresa configura sus propios commodities via `xerenity.risk_company_config
 
 ### Tab Resumen (dashboard consolidado, abril 2026)
 
-Vista por defecto al entrar a Commodities. Consolida las 4 secciones del portafolio:
+Vista por defecto al entrar a Commodities. Consolida 3 secciones:
 
 | Seccion | Fuente de datos | Campos |
 |---------|----------------|--------|
-| Commodities (Futuros) | `fetchFuturesPortfolio()` → Supabase | valor_t, pnl_month, # posiciones |
-| Derivados OTC | Supabase RPCs (`get_xccy/ndf/ibr_positions`) | notional, # posiciones |
-| Creditos | Zustand store (`fullLoan`) | total_value, accrued_interest |
-| Portafolio TES | Zustand store (`pricedTesBonds`) | npv, pnl_mtm |
+| Commodities | `benchmarkRows` (estado del Benchmark) | Posiciones por activo (Exp. Natural, GR, Total) + P&G |
+| Derivados OTC | `pricedXccy`/`pricedNdf` + `summary` + `refPrices.mtd` (trading store) | NPV COP, NPV USD, FX Delta, P&L MTD COP, P&L MTD USD |
+| Creditos | Supabase RPC `get_loans` directo | # creditos, deuda total, IBR vs Tasa Fija |
 
-**Layout:** 4 KPI cards arriba + tabla consolidada con sub-rows por seccion + fila de totales.
-**Navegacion:** Por mes (mismo patron que Benchmark).
-**Sin Fly.io:** Todo desde frontend (Supabase + Zustand stores).
+**Sincronizacion:** El Resumen lee `benchmarkRows` directamente, asi que refleja los mismos valores que el Benchmark al cambiar de mes.
+**Layout:** Commodities = tabla por activo, OTC = 5 KPI cards, Creditos = 4 cards.
+**FX Delta:** suma de `fx_delta` de `pricedXccy` + `pricedNdf` (con su signo).
+**P&L MTD:** `summary.total_npv_* − refPrices.mtd.summary.total_npv_*` (requiere haber repricado en /portfolio).
+**Auto-load:** Todos los tabs cargan automaticamente al entrar (sin boton Actualizar).
+**Formato:** `fmtCompact()` muestra valores como $13.4M, $453K, $15.
+**Sin Fly.io:** Todo desde frontend (Supabase directo).
 
 Labels renombrados en Benchmark: "Exposicion Natural" (antes "Super USD").
+
+### Portafolio GR (futuros)
+
+Posiciones individuales de futuros con P&L:
+- Sin unique constraint (permite multiples entradas al mismo contrato a diferentes precios)
+- Multiplicadores: MAIZ=5,000 bu, AZUCAR=112,000 lbs, CACAO=10 ton
+- Conversion cents→USD: MAIZ y AZUCAR multiplican × 0.01, CACAO sin conversion
+- Valor T = nominal × multiplicador × precio_actual × toUsd
+- P&L Mes = (precio_actual - precio_previo) × nominal × multiplicador × direccion × toUsd
+- P&L Inicio = (precio_actual - precio_compra) × nominal × multiplicador × direccion × toUsd
+- Filtro por fecha: solo se muestran posiciones con `entry_date <= filterDate` (consistente con Benchmark)
+- Subtotales por activo en la tabla (Total MAIZ, Total AZUCAR, etc.)
+- `futuresMonth` sincronizado con `benchmarkMonth` (ambas vistas muestran el mismo periodo)
+
+### Auto-llenado del Benchmark desde Portafolio GR y OTC
+
+`position_gr` y `pnl_gr` del Benchmark se llenan automaticamente:
+
+**Filas MAIZ / AZUCAR / CACAO** (desde `risk_futures_portfolio`):
+- `position_gr` = sum(Valor Compra) por activo del Portafolio GR
+- `pnl_gr` = sum((price_end - price_start) × multiplier × nominal × dirSign × toUsd)
+
+**Fila USD** (desde el store de trading OTC):
+- `position_gr` = sum de `fx_delta` de `pricedXccy` + `pricedNdf`
+- `pnl_gr` = `summary.total_npv_usd − refPrices.mtd.summary.total_npv_usd`
+
+- Se recalcula al cambiar el mes del Benchmark o al repricar OTC
+- Read-only en la UI (ya no se editan manualmente)
+- Celdas vacias se inicializan en `'0'` para que la fila Total sume todas las filas correctamente
 
 ### Tablas de riesgo en Supabase
 
 | Tabla | Scope | company_id |
 |-------|-------|-----------|
-| `risk_prices` | Global | No |
+| `risk_prices` | Global (front contract solo) | No |
+| `risk_prices_all_contracts` | Global (TODOS los contratos, solo close) | No |
 | `risk_positions` | Per-company | Si |
 | `risk_futures_portfolio` | Per-company | Si |
 | `risk_portfolio_config` | Per-company | Si |
 | `risk_company_config` | Per-company | Si (UNIQUE) |
+
+### Collectors de precios
+
+Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
+
+| Funcion | Proposito |
+|---------|-----------|
+| `collect_all(start, end)` | Sube precios del front contract a `risk_prices` |
+| `collect_all_contracts(start?, end?)` | Sube precios de TODOS los contratos a `risk_prices_all_contracts` |
+| `IBUpdater.update_all()` | Actualiza JSONs locales desde TWS via ib_async |
+
+Para actualizar precios:
+1. Abrir TWS
+2. `await IBUpdater().update_all()` — actualiza JSONs locales
+3. `collect_all(start, end)` — sube front contract a Supabase (para VaR)
+4. `collect_all_contracts()` — sube todos los contratos (para mark-to-market del Portafolio GR)
 
 ### Sidebar consolidado (abril 2026)
 

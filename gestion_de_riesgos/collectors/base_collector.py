@@ -676,6 +676,80 @@ COLLECTORS = {
 }
 
 
+def collect_all_contracts(start_date: str = None, end_date: str = None) -> dict:
+    """
+    Lee TODOS los contratos de los JSONs locales y los sube a la tabla
+    xerenity.risk_prices_all_contracts en Supabase.
+
+    Args:
+        start_date: filtra desde esta fecha (YYYY-MM-DD). Si None, sube todo.
+        end_date: filtra hasta esta fecha (YYYY-MM-DD). Si None, sube todo.
+
+    Returns:
+        dict con conteo de registros por activo y contrato.
+    """
+    from gestion_de_riesgos.db_risk import upsert_all_contracts_prices
+
+    results = {}
+
+    for asset_name, json_path in JSON_PATHS.items():
+        if not json_path.exists():
+            results[asset_name] = {'status': 'error', 'message': 'JSON not found'}
+            continue
+
+        config = COMMODITY_CONFIG[asset_name]
+        pattern = config['code_pattern']
+        db = _load_json(json_path)
+
+        all_records = []
+        contracts_loaded = []
+
+        for contract_code in sorted(db.keys()):
+            if not re.fullmatch(pattern, contract_code):
+                continue
+
+            bars = db.get(contract_code, [])
+            if not bars:
+                continue
+
+            for bar in bars:
+                bar_date = str(bar.get('date', ''))[:10]
+                if not bar_date:
+                    continue
+                if start_date and bar_date < start_date:
+                    continue
+                if end_date and bar_date > end_date:
+                    continue
+
+                close = bar.get('close')
+                if close is None:
+                    continue
+
+                all_records.append({
+                    'date': bar_date,
+                    'asset': asset_name,
+                    'contract': contract_code,
+                    'close': float(close),
+                })
+
+            contracts_loaded.append(contract_code)
+
+        if all_records:
+            try:
+                upsert_all_contracts_prices(all_records)
+                results[asset_name] = {
+                    'status': 'ok',
+                    'records': len(all_records),
+                    'contracts': len(contracts_loaded),
+                }
+            except Exception as e:
+                results[asset_name] = {'status': 'error', 'message': str(e)}
+        else:
+            results[asset_name] = {'status': 'ok', 'records': 0, 'contracts': 0}
+
+    return results
+
+
 def collect_all(start_date: str, end_date: str) -> dict:
     """
     Ejecuta todos los collectors y retorna resumen.
