@@ -42,7 +42,10 @@ class Loan:
                  db_info=None,
                  min_period_rate=None,
                  loan_identifier=None,
-                 bank=None):
+                 bank=None,
+                 company_id=None,
+                 sociedad=None,
+                 **kwargs):
         
         self.id=id
         self.owner=owner
