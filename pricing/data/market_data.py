@@ -9,7 +9,10 @@ import requests
 import pandas as pd
 from datetime import date, timedelta
 from typing import Optional
+from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 SUPABASE_URL = os.getenv("XTY_URL")
 SUPABASE_KEY = os.getenv("XTY_TOKEN")

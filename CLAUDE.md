@@ -202,9 +202,10 @@ xerenity-db
 
 | Seccion | Roles permitidos | Mecanismo |
 |---------|-----------------|-----------|
-| Riesgos (Commodities) | `super_admin`, `corp_admin` | `RoleGuard` + sidebar condicional |
-| Creditos (Loans) | Todos los logueados | Supabase RLS por `user_id` |
-| Pricing (NDF, Swaps) | Todos los logueados | Calculadoras stateless |
+| Riesgos (todas las sub-secciones) | `super_admin`, `corp_admin` | `RoleGuard` + sidebar condicional |
+| Creditos (Loans) | `super_admin`, `corp_admin` | RPCs con company filter via user_profiles |
+| Portafolio OTC (Derivados) | `super_admin`, `corp_admin` | RPCs con company filter via user_profiles |
+| Pricing (NDF, Swaps calculadoras) | Todos los logueados | Calculadoras stateless |
 | Usuarios | `super_admin`, `corp_admin` | `RoleGuard` |
 | Admin | `super_admin` | `RoleGuard` |
 
@@ -213,10 +214,19 @@ xerenity-db
 | Modulo | Aislamiento | Mecanismo |
 |--------|-------------|-----------|
 | Risk (Commodities) | Por `company_id` | Frontend lee Supabase directo, filtra por empresa |
-| Creditos (Loans) | Por `user_id` (owner) | RPCs con `auth.uid()`, RLS en `loans.loan` |
-| Portafolio OTC | Por `company_id` | RPCs autenticados en trading schema |
+| Creditos (Loans) | Por empresa (via owner→user_profiles) | RPC `get_loans` con SECURITY DEFINER, JOIN user_profiles |
+| Portafolio OTC | Por empresa (via owner→user_profiles) | RPCs `get_xccy/ndf/ibr_positions` con SECURITY DEFINER |
 | Pricers (NDF, Swaps) | N/A | Calculadoras stateless, no guardan datos |
 | Precios de mercado | N/A | Datos globales compartidos (risk_prices) |
+
+### Super admin: visibilidad global
+
+Super admin puede ver datos de cualquier empresa via selector global en el layout:
+- **Selector global:** `CoreLayout.tsx` muestra barra con dropdown de empresas en toda la seccion de Riesgos
+- **Store:** `selectedCompanyId` en UserSlice (Zustand), `activeCompanyId()` helper
+- **RPCs:** Todas las funciones aceptan `p_company_id uuid DEFAULT NULL`
+- **Logica:** Si `auth.uid()` es NULL pero `p_company_id` es NOT NULL → retorna datos de esa empresa
+- **Resolucion empresa:** `position.owner → user_profiles.company_id` (JOIN, no columna directa)
 
 ### Arquitectura del modulo de Commodities (migrado abril 2026)
 
