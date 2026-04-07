@@ -350,6 +350,41 @@ Posiciones individuales de futuros con P&L:
 - Subtotales por activo en la tabla (Total MAIZ, Total AZUCAR, etc.)
 - `futuresMonth` sincronizado con `benchmarkMonth` (ambas vistas muestran el mismo periodo)
 
+**Precios per-contrato (fix abril 2026, avelezX/xerenity-fe#256):**
+Cada contrato del Portafolio GR tiene su propio Px Actual y Px Previo, leidos
+de `xerenity.risk_prices_all_contracts` (no del front contract de `risk_prices`).
+Antes del fix, todos los contratos del mismo activo mostraban el mismo precio
+(ej. ZCN26, ZCU26, ZCZ26 todos en 457.75 porque se usaba el front contract
+ZCK26). Match 100% verificado contra el broker StoneX.
+
+Flujo:
+1. `riskApi.fetchFuturesPortfolio` carga en paralelo:
+   - `fetchRiskPricesAllContracts(start, end, contracts)` filtrado a los contratos
+     del portafolio (no se trae toda la tabla)
+   - `fetchRiskPrices` (front contract) como fallback
+2. `pivotPricesByContract` arma `{ ZCN26: [...], SBV26: [...], ... }`
+3. `calculateFuturesPortfolio` busca primero `pricesByContract[pos.contract]`;
+   si no hay datos cae al front contract (comportamiento legacy)
+
+**Helper `parseContractMaturity`** (en `futuresCalculator.ts`) convierte el
+codigo del contrato al mes de vencimiento usando los month codes estandar
+(F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct,
+X=Nov, Z=Dec). La columna Contrato del Portafolio GR muestra
+`ZCN26 (Jul 26)`, `SBV27 (Oct 27)`, etc.
+
+**Bug del boton Crear (fix avelezX/xerenity-fe#254):**
+`upsertFuturesPositionsDB` usaba `.upsert()` con `onConflict` apuntando a
+la constraint `uq_futures_position` que fue eliminada para permitir multiples
+entradas al mismo contrato. PostgREST retornaba 400 y el insert fallaba
+en silencio. Cambiado a `.insert()` puro.
+
+**Operacion: mantener `risk_prices_all_contracts` poblada:**
+Para que el Portafolio GR muestre precios correctos cada dia, hay que correr
+periodicamente `collect_all_contracts()` desde el backend (existe collector
+en `gestion_de_riesgos/collectors/base_collector.py`). Si la tabla no tiene
+el contrato/fecha, el frontend cae al fallback del front contract y los
+calculos vuelven a quedar incorrectos para los meses traseros.
+
 ### Auto-llenado del Benchmark desde Portafolio GR y OTC
 
 `position_gr` y `pnl_gr` del Benchmark se llenan automaticamente:
