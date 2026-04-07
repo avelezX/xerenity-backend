@@ -150,6 +150,27 @@ Todos los endpoints de risk requieren `Authorization: Bearer <supabase_jwt>` + `
 Super admins pueden pasar `company_id` en el body para ver portafolios de otras empresas.
 Endpoints de pricing y loans NO requieren auth (pricing es stateless, loans usa Supabase RLS).
 
+### USD/COP spot — fuente unica de verdad (abril 2026)
+
+**Regla:** Toda valoracion de portafolio OTC debe usar `market_marks.fx_spot` (snapshot
+EOD), NUNCA el ultimo tick intradia de `currency_hour` (SET-ICAP). Si no se respeta
+esta regla, los NPVs del blotter brincan cada vez que la pagina se refresca porque
+`currency_hour` recibe nuevos ticks continuamente durante el dia.
+
+| Funcion | Que lee | Quien la usa |
+|---------|---------|--------------|
+| `loader.fetch_usdcop_spot(date)` | `market_marks.fx_spot` (con fallback a `currency_hour` solo si no hay mark) | `/pricing/curves/build`, `/pricing/reprice-portfolio`, todo lo que hace pricing |
+| `loader.fetch_usdcop_spot_live(date)` | `currency_hour` directo (tick intradia) | **Solo** los jobs que CONSTRUYEN el mark: `run_compute_marks.py`, `run_backfill_marks.py`, `backfill_feb_mar_2026_marks.py` |
+
+Sin la separacion `_live`, habria loop circular: el job que escribe el mark no
+puede leerse a si mismo.
+
+Fix aplicado en avelezX/xerenity-backend#85.
+
+**Tablas relacionadas:**
+- `xerenity.market_marks` — snapshot EOD (1 fila por dia, escrita por `run_compute_marks.py`)
+- `xerenity.currency_hour` — ticks intradia de SET-ICAP (alimentada por `dm/run_collect_usd_to_cop.py`)
+
 ---
 
 ## Repos del ecosistema Xerenity (consolidado marzo 2026)
@@ -237,12 +258,14 @@ El modulo de Commodities ya NO depende de Fly.io. Los calculos se hacen en el fr
 
 | Archivo frontend | Funcion |
 |-----------------|---------|
+| `src/pages/risk-resumen/index.tsx` | Pagina Resumen (dashboard consolidado, selector de mes, propaga fecha a OTC y Commodities) |
+| `src/pages/risk-management/index.tsx` | Pagina Commodities con tabs (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR) |
 | `src/lib/risk/supabaseRisk.ts` | Queries directas a Supabase (risk_prices, positions, futures) |
 | `src/lib/risk/varCalculator.ts` | Motor VaR: log returns, rolling std, z-scores, covarianza |
 | `src/lib/risk/exposureCalculator.ts` | Exposicion USD por commodity |
 | `src/lib/risk/futuresCalculator.ts` | P&L de futuros con multiplicadores de contrato |
-| `src/lib/risk/companyConfig.ts` | Configuracion dinamica por empresa |
-| `src/lib/risk/resumenCalculator.ts` | Tab Resumen: consolida 4 secciones del portafolio |
+| `src/lib/risk/companyConfig.ts` | Config dinamica por empresa + `DEFAULT_EXPOSURE_PARAMS` compartidos |
+| `src/lib/risk/resumenCalculator.ts` | Helper que arma el `ResumenData` (creditos + composicion final OTC) |
 | `src/models/risk/riskApi.ts` | API client que orquesta queries + calculos |
 
 ### Configuracion por empresa (risk_company_config)
@@ -268,23 +291,49 @@ Cada empresa configura sus propios commodities via `xerenity.risk_company_config
 - **Corp admin sin config:** ve pantalla de setup para seleccionar commodities
 - **Gestor/lector:** no tienen acceso a Riesgos
 
-### Tab Resumen (dashboard consolidado, abril 2026)
+### Pagina Resumen (dashboard consolidado, abril 2026)
 
-Vista por defecto al entrar a Commodities. Consolida 3 secciones:
+**Pagina propia** en `/risk-resumen` (entry del sidebar arriba de Commodities).
+Antes era un tab dentro de `/risk-management`; se movio para que tuviera selector
+de mes propio y pudiera propagar la fecha a las 3 secciones.
 
-| Seccion | Fuente de datos | Campos |
-|---------|----------------|--------|
-| Commodities | `benchmarkRows` (estado del Benchmark) | Posiciones por activo (Exp. Natural, GR, Total) + P&G |
-| Derivados OTC | `pricedXccy`/`pricedNdf` + `summary` + `refPrices.mtd` (trading store) | NPV COP, NPV USD, FX Delta, P&L MTD COP, P&L MTD USD |
-| Creditos | Supabase RPC `get_loans` directo | # creditos, deuda total, IBR vs Tasa Fija |
+Archivo: `xerenity-fe/src/pages/risk-resumen/index.tsx`
 
-**Sincronizacion:** El Resumen lee `benchmarkRows` directamente, asi que refleja los mismos valores que el Benchmark al cambiar de mes.
-**Layout:** Commodities = tabla por activo, OTC = 5 KPI cards, Creditos = 4 cards.
+| Seccion | Fuente de datos | Campos | Respeta el mes? |
+|---------|----------------|--------|-----------------|
+| Commodities | `fetchBenchmarkFactors` + `fetchFuturesPortfolio` + `fetchExposure` (todos con `filterDate`) | Por activo: Exp. Natural, GR, Total + P&G Super/GR/Total | Si |
+| Derivados OTC | `repriceAllWithMark(filterDate)` + `loadReferencePrices(prevMonthDate)` | NPV COP, NPV USD, FX Delta, P&L MTD COP, P&L MTD USD | Si |
+| Creditos | Supabase RPC `get_loans` directo | # creditos, deuda total, IBR vs Tasa Fija | **No** (snapshot actual; la RPC no acepta fecha. Marcado con disclaimer en la UI) |
+
+**Selector de mes:** mismo patron que Benchmark (`< Marzo 2026 >`). Al cambiar de
+mes, un solo `useEffect` dispara en cascada:
+1. `repriceAllWithMark(filterDate)` → reprice OTC con curvas EOD del mes
+2. `loadReferencePrices(prevMonthLastBD)` → MTD reference para calcular P&L MTD
+3. `fetchBenchmarkFactors` + `fetchFuturesPortfolio` + `fetchExposure` en paralelo
+4. Build local de la tabla de commodities (incluye fila USD desde el store OTC)
+
+**Fila USD en la tabla de Commodities:**
+- `position_super` = `exposicion_real_usd` (de fetchExposure)
+- `position_gr` = sum de `fx_delta` de `pricedXccy` + `pricedNdf`
+- `pnl_super` = `(price_end - price_start) × super / price_start`
+- `pnl_gr` = P&L MTD USD del store OTC
+
+**Exposicion Natural por mes:** `fetchExposure(filterDate, DEFAULT_EXPOSURE_PARAMS)`
+trae los precios de fin de mes desde Supabase y los inyecta en los parametros de
+proyeccion. Asi la exposicion se recalcula correctamente para cada mes aunque los
+parametros de proyeccion sean los mismos.
+
+`DEFAULT_EXPOSURE_PARAMS` vive en `xerenity-fe/src/lib/risk/companyConfig.ts` para
+evitar duplicacion entre `/risk-management` y `/risk-resumen`.
+**Pendiente:** persistir estos parametros a `risk_company_config.exposure_defaults`
+para que cada empresa pueda guardar los suyos.
+
 **FX Delta:** suma de `fx_delta` de `pricedXccy` + `pricedNdf` (con su signo).
-**P&L MTD:** `summary.total_npv_* − refPrices.mtd.summary.total_npv_*` (requiere haber repricado en /portfolio).
-**Auto-load:** Todos los tabs cargan automaticamente al entrar (sin boton Actualizar).
+**P&L MTD:** `summary.total_npv_* − refPrices.mtd.summary.total_npv_*`
+**Auto-load:** Al entrar a la pagina y al cambiar de mes/empresa, sin boton manual.
 **Formato:** `fmtCompact()` muestra valores como $13.4M, $453K, $15.
-**Sin Fly.io:** Todo desde frontend (Supabase directo).
+**Sin Fly.io para risk:** Todo desde frontend (Supabase directo) excepto el repricing
+de OTC que sigue usando el backend Django para QuantLib.
 
 Labels renombrados en Benchmark: "Exposicion Natural" (antes "Super USD").
 
@@ -348,7 +397,8 @@ Para actualizar precios:
 
 ```
 Riesgos (solo super_admin y corp_admin)
-  ├── Commodities        → /risk-management
+  ├── Resumen            → /risk-resumen      (dashboard consolidado con selector de mes)
+  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR)
   ├── Creditos           → /loans
   ├── Portafolio OTC     → /portfolio
   ├── NDF Pricer         → /ndf-pricer
@@ -357,6 +407,9 @@ Riesgos (solo super_admin y corp_admin)
   ├── COLTES             → /coltes-calculator
   └── Portafolio TES     → /tes-portfolio
 ```
+
+`/risk-resumen` esta en `RISK_PATHS` de `CoreLayout.tsx` para que el selector
+global de empresa de super_admin tambien aparezca en esa pagina.
 
 ### Deploy
 
@@ -367,10 +420,35 @@ Riesgos (solo super_admin y corp_admin)
 | Base de datos | Supabase | Migraciones manuales en SQL Editor |
 
 ### Variables de entorno requeridas
+
+**Backend (xerenity-backend / pysdk):**
 ```
-SUPABASE_JWT_SECRET=<jwt-secret-de-supabase-dashboard>  # Para auth en backend
+XTY_URL=https://tvpehjbqxpiswkqszwwv.supabase.co
+XTY_TOKEN=<service_role_jwt_legacy>                      # Formato JWT eyJ... (no sb_secret_*)
+COLLECTOR_BEARER=<service_role_jwt_legacy>
+SUPABASE_JWT_SECRET=<jwt-secret-de-supabase-dashboard>   # Para auth en backend
 FLY_API_TOKEN=<fly-deploy-token>                         # Secret en GitHub para CI/CD
 ```
+
+**Frontend (xerenity-fe) — local y Vercel:**
+```
+NEXT_PUBLIC_SUPABASE_URL=https://tvpehjbqxpiswkqszwwv.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon_jwt_legacy>          # Formato eyJ... (NO sb_publishable_*)
+NEXT_PUBLIC_PYSDK_URL=https://pysdk.fly.dev              # localhost:8000 en dev
+SUPABASE_SERVICE_ROLE_KEY=<service_role_jwt_legacy>      # Formato eyJ... (NO sb_secret_*)
+```
+
+**IMPORTANTE — formato de API keys de Supabase:**
+Supabase rotó a un formato nuevo de API keys (`sb_publishable_*` / `sb_secret_*`).
+**Estos NO funcionan** con `@supabase/auth-helpers-nextjs` (libreria deprecated que
+usa el frontend). Si los builds de Vercel fallan con `Error: either NEXT_PUBLIC_SUPABASE_URL
+and NEXT_PUBLIC_SUPABASE_ANON_KEY env variables ... are required`, es porque alguien
+puso un key con el formato nuevo. **Solucion:** revertir al JWT legacy (`eyJhbGc...`)
+disponible en Supabase Dashboard → Project Settings → API → Legacy API keys.
+
+**Migracion futura:** mover el frontend de `@supabase/auth-helpers-nextjs` (deprecated)
+a `@supabase/ssr` para soportar el formato nuevo. Es refactor de ~10-15 archivos,
+hacerlo en PR aparte.
 
 ## Estructura del monorepo
 ```
