@@ -172,15 +172,53 @@ class MarketDataLoader:
 
     def fetch_usdcop_spot(self, target_date: str = None) -> Optional[float]:
         """
-        Fetch latest USD/COP spot rate.
+        Fetch USD/COP spot rate for pricing/valuation.
 
-        Primary source: currency_hour table (SET-ICAP intraday prices).
-          - Live: last trade of the day.
-          - Historical (target_date provided): last trade of that date.
+        IMPORTANT: For portfolio valuation we MUST use the frozen EOD spot
+        stored in market_marks.fx_spot (the same value shown in the Marks
+        tab of the frontend). Otherwise the portfolio "jumps" every time
+        currency_hour receives a new intraday tick from SET-ICAP.
 
-        Fallback: cop_fwd_points SN tenor mid (FXEmpire), used when
-        currency_hour has no data for the requested date (e.g. weekends,
-        dates before the SET-ICAP collector was live).
+        Resolution order:
+          1. market_marks.fx_spot for target_date (frozen EOD snapshot)
+          2. market_marks.fx_spot for latest available date (if target_date
+             is None or has no mark yet)
+          3. currency_hour last trade (only for the live/latest path when
+             no market_marks row exists yet — e.g. intraday before the
+             EOD compute job has run)
+          4. cop_fwd_points SN tenor mid (FXEmpire) as final fallback
+
+        Use fetch_usdcop_spot_live() explicitly if you need the raw SET-ICAP
+        tick (e.g. inside run_compute_marks.py when computing a new mark).
+        """
+        # 1. Try the requested date from market_marks
+        if target_date is not None:
+            marks_data = self._get(
+                "market_marks",
+                f"select=fx_spot&fecha=eq.{target_date}&limit=1",
+            )
+            if marks_data and marks_data[0].get("fx_spot") is not None:
+                return float(marks_data[0]["fx_spot"])
+
+        # 2. Fall back to latest market_marks row
+        latest = self._get(
+            "market_marks",
+            "select=fx_spot&order=fecha.desc&limit=1",
+        )
+        if latest and latest[0].get("fx_spot") is not None:
+            return float(latest[0]["fx_spot"])
+
+        # 3. No EOD mark available — use live SET-ICAP tick as last resort
+        value = self._fetch_usdcop_setfx(target_date)
+        if value is not None:
+            return value
+        return self._fetch_usdcop_fwd_points_sn(target_date)
+
+    def fetch_usdcop_spot_live(self, target_date: str = None) -> Optional[float]:
+        """
+        Fetch raw USD/COP spot directly from SET-ICAP (currency_hour table),
+        bypassing market_marks. Used by run_compute_marks.py to build a new
+        daily mark from the latest intraday tick.
         """
         value = self._fetch_usdcop_setfx(target_date)
         if value is not None:

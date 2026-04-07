@@ -115,7 +115,8 @@ def main():
         fills = []
 
         # ── FX spot ──
-        fx_spot = loader.fetch_usdcop_spot(target_date=fecha)
+        # Backfill builds new marks — use live SET-ICAP tick, not market_marks.
+        fx_spot = loader.fetch_usdcop_spot_live(target_date=fecha)
         if fx_spot is None:
             fx_spot = last["fx_spot"]
             fills.append("spot")
