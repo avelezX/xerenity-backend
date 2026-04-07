@@ -36,7 +36,8 @@ def compute_marks(target_date: str = None) -> dict:
     # ── Fetch ──
     ibr_quotes = loader.fetch_ibr_quotes(target_date=target_date)
     sofr_df    = loader.fetch_sofr_curve(target_date=target_date)
-    fx_spot    = loader.fetch_usdcop_spot(target_date=target_date)
+    # Use live SET-ICAP tick here — this is the job that WRITES the mark.
+    fx_spot    = loader.fetch_usdcop_spot_live(target_date=target_date)
     cop_fwd    = loader.fetch_cop_forwards(target_date=target_date)
     sofr_on    = loader.fetch_sofr_spot(target_date=target_date)
 

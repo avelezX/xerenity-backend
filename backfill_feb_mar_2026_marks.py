@@ -132,7 +132,8 @@ def main():
         # ── Fetch real market data for this date ──
         ibr_quotes = loader.fetch_ibr_quotes(target_date=fecha)
         sofr_df    = loader.fetch_sofr_curve(target_date=fecha)
-        fx_spot    = loader.fetch_usdcop_spot(target_date=fecha)
+        # Backfill job — use live SET-ICAP tick, not market_marks (we're building the mark).
+        fx_spot    = loader.fetch_usdcop_spot_live(target_date=fecha)
         sofr_on    = loader.fetch_sofr_spot(target_date=fecha)
 
         # ── FX Spot: carry forward if missing ──
