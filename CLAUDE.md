@@ -401,6 +401,54 @@ calculos vuelven a quedar incorrectos para los meses traseros.
 - Read-only en la UI (ya no se editan manualmente)
 - Celdas vacias se inicializan en `'0'` para que la fila Total sume todas las filas correctamente
 
+### Aislamiento de datos multi-tenant en Commodities (fix abril 2026)
+
+**Problema resuelto:** una empresa nueva (e.g. "El Embrujo") al configurar sus
+commodities veia datos de Super de Alimentos en Benchmark, Rolling VaR, Exposicion
+y Matrices. Esto se daba porque esos tabs leian de `risk_prices` (tabla global) y
+NO filtraban por los commodities seleccionados en `risk_company_config`.
+
+**Fix aplicado (branch `riesgos-v1` de xerenity-fe):**
+
+| Modulo | Antes | Ahora |
+|--------|-------|-------|
+| `fetchBenchmarkFactors` | Pivoteaba TODOS los assets de `risk_prices` | Filtra por `companyConfig.commodities + currency_asset` |
+| `fetchRollingVar` | Igual que arriba | Filtra igual |
+| `handleFetchExposure` | Usaba `DEFAULT_EXPOSURE_PARAMS` (hardcoded Super) para TODAS las empresas | Skipea si `companyConfig.exposure_defaults` esta vacio. Solo Super de Alimentos tiene exposure_defaults poblados |
+| Benchmark fallback | Caia a `DEFAULT_ASSETS = [MAIZ, AZUCAR, CACAO, USD]` | Cae a `dynamicAssets` del config de la empresa |
+
+**Resultado por empresa:**
+- **Super de Alimentos** (tiene exposure_defaults + risk_prices con MAIZ/AZUCAR/CACAO/USD): ve todo igual que antes.
+- **Empresa nueva sin datos** (e.g. El Embrujo con CAFE): ve dashboard vacio con toast "Sin datos de mercado para los commodities de esta empresa". Para que aparezcan datos de CAFE, hay que: (1) agregar un collector de cafe a TWS, (2) correr `collect_all` para subir precios de CAFE a `risk_prices`.
+- **Empresa nueva con datos** (si se configura y hay precios en risk_prices para sus commodities): funciona out-of-the-box, ve solo sus commodities.
+
+**Tablas de empresas — dual tables (problema heredado):**
+Existen dos tablas de empresas en Supabase:
+
+| Tabla | Schema | Creada por | Usada por |
+|-------|--------|-----------|-----------|
+| `trading.company` | trading | Sistema viejo | FKs de: `risk_company_config`, `risk_futures_portfolio`, `risk_positions`, `risk_portfolio_config` |
+| `xerenity.companies` | xerenity | Sistema multi-tenant (Andres) | RPCs `list_companies`, `create_company`, `user_profiles.company_id`, dropdown global |
+
+**Bug:** al crear una empresa desde el frontend via `xerenity.create_company()`, solo
+se insertaba en `xerenity.companies`. Luego al guardar config en `risk_company_config`
+el FK a `trading.company` fallaba silenciosamente (409 PostgREST).
+
+**Fix aplicado (SQL en Supabase, abril 2026):**
+1. Se creo la fila espejo de "El Embrujo" en `trading.company` con el MISMO uuid.
+2. Se actualizo `xerenity.create_company()` para insertar en AMBAS tablas en la misma transaccion. Cualquier empresa nueva se crea automaticamente en ambas.
+
+La migracion SQL se guardo en `gestion_de_riesgos/sql/fix_create_company_dual_insert.sql`.
+
+**Pendiente (deuda tecnica):** unificar las dos tablas en una sola fuente de verdad
+(migrar todos los FKs a `xerenity.companies` y deprecar `trading.company`). Hacerlo
+en un PR aparte porque requiere migrar datos existentes.
+
+**Exposicion por empresa — estado actual:**
+- `DEFAULT_EXPOSURE_PARAMS` en `companyConfig.ts` es **especifico de Super de Alimentos** (toneladas de azucar, glucosa, cacao, fletes, processing fees, etc.).
+- Solo aplica si `risk_company_config.exposure_defaults` tiene data (actualmente solo Super de Alimentos).
+- Para empresas nuevas (e.g. El Embrujo con cafe): hay que crear un formulario generico de exposicion donde cada empresa ingrese sus parametros de proyeccion. Mientras tanto el tab Exposicion queda vacio.
+
 ### Tablas de riesgo en Supabase
 
 | Tabla | Scope | company_id |
@@ -411,6 +459,8 @@ calculos vuelven a quedar incorrectos para los meses traseros.
 | `risk_futures_portfolio` | Per-company | Si |
 | `risk_portfolio_config` | Per-company | Si |
 | `risk_company_config` | Per-company | Si (UNIQUE) |
+| `trading.company` | Global | N/A (es la tabla de empresas legacy) |
+| `xerenity.companies` | Global | N/A (tabla de empresas nueva, mismos UUIDs que trading.company) |
 
 ### Collectors de precios
 
