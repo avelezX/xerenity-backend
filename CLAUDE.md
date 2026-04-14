@@ -462,6 +462,40 @@ en un PR aparte porque requiere migrar datos existentes.
 | `trading.company` | Global | N/A (es la tabla de empresas legacy) |
 | `xerenity.companies` | Global | N/A (tabla de empresas nueva, mismos UUIDs que trading.company) |
 
+### Precios Locales de Café (tab condicional, abril 2026)
+
+Tab **"Precios Locales"** (icono faMugHot) en `/risk-management` que aparece
+**solo para empresas que tienen CAFE** en `risk_company_config.commodities`.
+
+Fuente: `xerenity.coffee_prices` (RLS desactivado, GRANT a authenticated).
+
+| Columna | Tipo | Descripcion |
+|---------|------|-------------|
+| `id` | UUID | PK |
+| `fecha` | DATE | Fecha del precio |
+| `fuente` | TEXT | `'FNC'` o `'ANSERMA'` |
+| `tipo_precio` | TEXT | Tipo de precio (6 tipos) |
+| `valor` | TEXT | Precio en COP (parsear a number) |
+| `unidad` | TEXT | `'COP'` |
+
+**Tipos de precio:**
+- **FNC:** `precio_interno_carga` (Precio Interno por Carga de 125 Kg)
+- **ANSERMA:** `precio_base_f90`, `precio_ref_f94`, `precio_nespresso_f90`,
+  `precio_cp_creciente_f90`, `precio_humedo_cereza`
+
+**UI — dos graficas separadas:**
+1. **Cooperativa de Anserma** — LineChart con 5 series, eje Y con zoom
+   al rango real (`dataMin - 5000` a `dataMax + 5000`) para evidenciar
+   variaciones de precio. Tabla con ultimas 10 fechas debajo.
+2. **Fondo Nacional de Cafeteros (FNC)** — LineChart roja con selector
+   de rango de fechas (Desde/Hasta) para que el usuario elija el periodo.
+   Tabla filtrada debajo.
+
+**Frontend:**
+- `fetchCoffeePrices()` en `supabaseRisk.ts` — query directa a Supabase
+- Tab dinámico: se agrega al array `pageTabs` via `useEffect` que detecta
+  `hasCafe` (si `companyConfig.commodities` contiene un asset `'CAFE'`)
+
 ### Collectors de precios
 
 Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
@@ -483,7 +517,7 @@ Para actualizar precios:
 ```
 Riesgos (solo super_admin y corp_admin)
   ├── Resumen            → /risk-resumen      (dashboard consolidado con selector de mes)
-  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR)
+  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*)
   ├── Creditos           → /loans
   ├── Portafolio OTC     → /portfolio
   ├── NDF Pricer         → /ndf-pricer
