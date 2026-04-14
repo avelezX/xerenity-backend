@@ -33,6 +33,7 @@ JSON_PATHS = {
     'MAIZ': DATA_DIR / 'data_zc1.json',
     'AZUCAR': DATA_DIR / 'data_sb.json',
     'CACAO': DATA_DIR / 'data_cc.json',
+    'CAFE': DATA_DIR / 'data_kc.json',
 }
 
 TRM_EXCEL_PATH = DATA_DIR / 'trm.xlsx'
@@ -79,6 +80,15 @@ COMMODITY_CONFIG = {
         'code_pattern': r'CC[HKNUZ]\d{2}',
         'expiry_day': 14,
         'expiry_month_offset': 0,
+        'roll_days_before': 10,
+    },
+    'CAFE': {
+        'symbol': 'KC',
+        'exchanges': ['NYBOT', 'ICEUS'],
+        'months': {'H': '03', 'K': '05', 'N': '07', 'U': '09', 'Z': '12'},
+        'code_pattern': r'KC[HKNUZ]\d{2}',
+        'expiry_day': 19,          # ICE Coffee: ~19 del mes anterior al contrato
+        'expiry_month_offset': -1,  # Vence en el mes anterior al mes del contrato
         'roll_days_before': 10,
     },
 }
@@ -415,6 +425,17 @@ class CocoaCollector(FuturesJSONCollector):
         )
 
 
+class CoffeeCollector(FuturesJSONCollector):
+    """Collector para futuros de Cafe (KC) - Coffee C, NYBOT/ICEUS via IB"""
+
+    def __init__(self):
+        super().__init__(
+            'CAFE',
+            JSON_PATHS['CAFE'],
+            COMMODITY_CONFIG['CAFE'],
+        )
+
+
 class TRMCollector(BaseCollector):
     """
     Collector para TRM (USD/COP).
@@ -672,6 +693,7 @@ COLLECTORS = {
     'MAIZ': CornCollector,
     'AZUCAR': SugarCollector,
     'CACAO': CocoaCollector,
+    'CAFE': CoffeeCollector,
     'USD': TRMCollector,
 }
 
@@ -802,7 +824,7 @@ def get_collectors_status() -> dict:
     """Retorna el estado de los datos disponibles por asset."""
     status = {}
 
-    for name in ['MAIZ', 'AZUCAR', 'CACAO']:
+    for name in ['MAIZ', 'AZUCAR', 'CACAO', 'CAFE']:
         json_path = JSON_PATHS.get(name)
         if json_path and json_path.exists():
             db = _load_json(json_path)
