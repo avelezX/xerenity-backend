@@ -211,6 +211,16 @@ def wake_up(request):
     return responseHttpOk(body={"message": "Servidor de creditos activado", "version": "2026-04-01-auth-optional"})
 
 
+def usdcop_calculator(request):
+    try:
+        from server.usdcop_calculator.usdcop_calculator import UsdCopCalculator
+        return UsdCopCalculator().calculate()
+    except XerenityError as xerror:
+        return responseHttpError(message=xerror.message, code=xerror.code)
+    except Exception as e:
+        return responseHttpError(message=str(e), code=400)
+
+
 urlpatterns = [
     path("period_payment", csrf_exempt(period_payment), name="period_payment"),
     path("cash_flow", csrf_exempt(cash_flow), name="cash_flow"),
@@ -221,6 +231,7 @@ urlpatterns = [
     path("all_loans", csrf_exempt(all_loans), name="all_loans"),
     path("uvr_rates", csrf_exempt(uvr_rates), name="uvr_rates"),
     path("wake_up", csrf_exempt(wake_up), name="wake_up"),
+    path("usdcop_calculator", csrf_exempt(usdcop_calculator), name="usdcop_calculator"),
     path("risk_management", csrf_exempt(risk_management), name="risk_management"),
     path("risk_rolling_var", csrf_exempt(risk_rolling_var), name="risk_rolling_var"),
     path("risk_benchmark_factors", csrf_exempt(risk_benchmark_factors), name="risk_benchmark_factors"),
