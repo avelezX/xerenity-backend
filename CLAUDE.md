@@ -131,6 +131,9 @@ curl -s -X POST http://localhost:8000/risk_benchmark_factors \
 - `POST /risk_futures_portfolio_delete` — eliminar posicion
 - `POST /risk_futures_portfolio_edit` — editar campos de posicion
 
+**USDCOP Calculator:**
+- `GET  /usdcop_calculator` — TRM spot + volatilidad rolling 180d (diaria/anual)
+
 **Pricing API:**
 - `POST /pricing/curves/build` — construir curvas (IBR, SOFR, NDF, TES)
 - `GET  /pricing/curves/status` — estado de curvas
@@ -496,6 +499,27 @@ Fuente: `xerenity.coffee_prices` (RLS desactivado, GRANT a authenticated).
 - Tab dinámico: se agrega al array `pageTabs` via `useEffect` que detecta
   `hasCafe` (si `companyConfig.commodities` contiene un asset `'CAFE'`)
 
+### CAFE collector (ICE KC, abril 2026)
+
+Nuevo collector de futuros de cafe (Coffee C, symbol KC) en ICE/NYBOT.
+Agregado a `COMMODITY_CONFIG`, `JSON_PATHS`, `COLLECTORS` y `get_collectors_status`.
+
+| Config | Valor |
+|--------|-------|
+| Symbol | KC |
+| Exchange | NYBOT / ICEUS |
+| Meses | H (Mar), K (May), N (Jul), U (Sep), Z (Dec) |
+| Multiplier | 37,500 lbs |
+| Notebook | `gestion_de_riesgos/collectors/ibkr/cafe.ipynb` |
+| JSON | `data_kc.json` (en DATA_DIR de SharePoint) |
+| whatToShow | `MIDPOINT` (TRADES no funciona para KC en IBKR, timeout) |
+| Chunks | 60 dias (duraciones > 60d causan timeout en IBKR para KC) |
+
+**Nota IBKR para CAFE:** a diferencia de MAIZ/AZUCAR/CACAO que usan `TRADES`,
+KC requiere `MIDPOINT` y descarga en chunks de 60 dias. Duraciones mayores
+(e.g. 480d) causan timeout. El notebook `cafe.ipynb` incluye funcion
+`discover_contracts()` para la primera ejecucion (JSON vacio).
+
 ### Collectors de precios
 
 Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
@@ -512,12 +536,57 @@ Para actualizar precios:
 3. `collect_all(start, end)` — sube front contract a Supabase (para VaR)
 4. `collect_all_contracts()` — sube todos los contratos (para mark-to-market del Portafolio GR)
 
+### Calculadora USDCOP (abril 2026)
+
+Tab **"Calculadora USDCOP"** (icono faCalculator) en `/risk-management`,
+disponible para **TODAS las empresas** (no condicional en commodity).
+
+**Backend:** `GET /usdcop_calculator` en `server/usdcop_calculator/usdcop_calculator.py`.
+Lee TRM de `xerenity.banrep_series_value_v2` (serie BanRep 25), calcula vol
+rolling 180d con log-returns, retorna `{ trm, vol_diaria, vol_anual, fecha }`.
+
+**Frontend:** `fetchUsdCopCalculator()` en `models/risk/usdcopCalculator.ts`.
+Consume `NEXT_PUBLIC_PYSDK_URL/usdcop_calculator`.
+
+**UI:**
+- 4 stat cards: TRM actual, Fecha, Vol diaria (180d), Vol anual (180d)
+- 2 sliders: Dias a pronosticar (1-180), Desviaciones estandar (0.5-3.0 σ)
+- 4 result cards: Piso, Techo, Amplitud, Confianza (%)
+- Cono de incertidumbre (Recharts ComposedChart): Area Techo (verde) +
+  Area Piso (rojo) + Line TRM (azul punteado)
+- Seccion de justificacion estadistica: rolling 180d, niveles sigma,
+  regla de raiz del tiempo, limitaciones del modelo, guia practica
+
+**Calculo:** `bandAt(t, k) = TRM × (1 ± σ_d × √t × k)` donde σ_d = vol_diaria.
+
+### CommoditySetup — USD-only flow (abril 2026)
+
+La pantalla de setup de commodities ahora permite guardar con **0 commodities**
+(solo USD). USD se incluye automaticamente via `currency_asset` del config.
+
+- Tarjeta fija "USD (fijo) — BanRep TRM" en el grid (azul, no clickeable)
+- Boton "Continuar solo con USD" si no hay commodities seleccionados
+- Boton "Configurar N commodities + USD" si hay seleccion
+- Texto explicativo: "USD/COP (TRM) se incluye automaticamente"
+- Util para empresas que solo gestionan FX (e.g. Los Coches)
+
+### Rolling VaR — selectedAsset dinamico (fix abril 2026)
+
+`selectedAsset` ya NO arranca hardcodeado en `'MAIZ'`. Ahora:
+- Arranca vacio (`useState('')`)
+- Un `useEffect` lo sincroniza con `assets[0]` del companyConfig
+- Si la empresa solo tiene USD → Rolling VaR abre en USD
+- Si tiene CAFE → abre en CAFE
+- Si tiene MAIZ, AZUCAR, CACAO → abre en MAIZ (primer asset)
+- Si el asset seleccionado ya no esta en la lista (cambio de empresa),
+  se reemplaza automaticamente por el primero disponible
+
 ### Sidebar consolidado (abril 2026)
 
 ```
 Riesgos (solo super_admin y corp_admin)
   ├── Resumen            → /risk-resumen      (dashboard consolidado con selector de mes)
-  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*)
+  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*, Calculadora USDCOP)
   ├── Creditos           → /loans
   ├── Portafolio OTC     → /portfolio
   ├── NDF Pricer         → /ndf-pricer
