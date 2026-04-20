@@ -581,12 +581,86 @@ La pantalla de setup de commodities ahora permite guardar con **0 commodities**
 - Si el asset seleccionado ya no esta en la lista (cambio de empresa),
   se reemplaza automaticamente por el primero disponible
 
+### Resumen Exposicion Compañia — fix de campos (abril 2026)
+
+Bug en `fetchExposure` (`src/models/risk/riskApi.ts`): el resumen mostraba
+"Exposición Ventas Intl." igual al valor de "Exposición Real USD" aunque
+el input del usuario era distinto. Ejemplo concreto con Super de Alimentos:
+- Input Ventas Intl. (USD): `130,025,826`
+- Card mostraba: `82,693,807` (incorrecto, era el Real USD)
+
+**Causa:** el fetcher asignaba `exposicion_ventas_intl: result.exposicion_real_usd`
+en vez de `result.ventas_intl_usd`. Ademas `exposicion_pen` estaba hardcoded a 0.
+
+**Fix (mismo archivo, funcion `fetchExposure`):**
+```ts
+exposicion_ventas_intl: result.ventas_intl_usd,  // antes: result.exposicion_real_usd
+exposicion_pen:         result.ventas_pe_usd,    // antes: 0
+```
+
+**Formula segun la metodologia (tab Exposicion):**
+```
+Exposicion Real USD = Ventas Internacionales (USD) − Total Commodities (USD)
+```
+Para Super: `82,693,807 = 130,025,826 − 47,332,019` ✓
+
+### MAÍZ / GLUCOSA — calculo de # Contratos (abril 2026)
+
+Antes el card MAÍZ/GLUCOSA en el tab Exposicion no mostraba el numero de
+contratos de futuros CBOT ZC necesarios para cubrir la proyeccion de glucosa.
+Ademas las filas de "Precio Maíz (¢/ton)", "Precio Maíz (USD/ton)", "Crédito
+Subproductos", "Glucosa Materia", "Precio Glucosa" mostraban "—" porque el
+UI accedia a `mz.precio_usd_ton` pero el calculador los guarda en
+`mz.detalle.precio_usd_ton`.
+
+**Cambios en `src/lib/risk/exposureCalculator.ts`:**
+
+Constantes nuevas:
+```ts
+const TON_PER_BUSHEL = 0.0254;              // 1 bushel de maiz = 25.4 kg
+const CORN_BUSHELS_CONTRATO = 5000;         // CBOT Corn futures = 5,000 bu
+const CORN_TON_CONTRATO = 5000 × 0.0254;    // = 127 toneladas/contrato
+```
+
+Calculo correcto de # contratos en `calcularMaiz()`:
+```
+TON Maíz reales = TON Glucosa (proyeccion) × Factor Maíz→Glucosa
+                = 27,324 × 1.495
+                = 40,849 toneladas
+
+# Contratos   = TON Maíz reales ÷ TON Contrato CBOT ZC
+              = 40,849 ÷ 127
+              = 321.65 contratos
+```
+
+**Interpretacion:** si Super quisiera cobertura 100% de su exposicion al precio
+del maiz, tendria que comprar ~322 contratos ZC en CBOT. Es el equivalente al
+calculo que ya existia para AZUCAR (~783 contratos).
+
+`detalle` del `CommodityExposure` ahora incluye: `precio_cent_ton`,
+`precio_glucosa`, `ton_contrato` (127), `factor_maiz_glucosa`. Antes solo
+estaban `precio_usd_ton`, `credito_subproductos`, `glucosa_materia`, etc.
+
+UI actualizado en `risk-management/index.tsx` para leer desde
+`mz.detalle.*` con cast `as Record<string, number>` (el tipo
+`CommodityExposure` declara `detalle` como `unknown`). Agregadas 3 filas
+nuevas al card: TON Contrato (CBOT ZC), TON Maíz reales, # Contratos.
+
+### Sidebar: rename "Commodities" → "Exposición" (abril 2026)
+
+El item del sidebar que apunta a `/risk-management` ahora se llama
+**Exposición** en lugar de **Commodities**. Refleja mejor el contenido
+del modulo (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR,
+Precios Locales*, Calculadora USDCOP). Cambio de label solamente; la
+ruta `/risk-management` y el archivo `SidebarNavList.tsx` solo cambian
+la prop `name`.
+
 ### Sidebar consolidado (abril 2026)
 
 ```
 Riesgos (solo super_admin y corp_admin)
   ├── Resumen            → /risk-resumen      (dashboard consolidado con selector de mes)
-  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*, Calculadora USDCOP)
+  ├── Exposición         → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*, Calculadora USDCOP)
   ├── Creditos           → /loans
   ├── Portafolio OTC     → /portfolio
   ├── NDF Pricer         → /ndf-pricer
