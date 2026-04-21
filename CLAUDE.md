@@ -708,6 +708,66 @@ UI actualizado en `risk-management/index.tsx` para leer desde
 `CommodityExposure` declara `detalle` como `unknown`). Agregadas 3 filas
 nuevas al card: TON Contrato (CBOT ZC), TON Maíz reales, # Contratos.
 
+### Formulaciones Super de Alimentos: AKOMEL, CEBES, ALMIDÓN (abril 2026)
+
+Tab **Exposición** en `/risk-management` ahora muestra 3 tarjetas adicionales
+condicionales en `company_id === SUPER_ALIMENTOS_ID` con el calculo de precio
+unitario por formulacion — port fiel del instructivo Python de Super.
+
+| Tarjeta | Materia prima | Unidad precio final | Productos derivados |
+|---------|---------------|---------------------|---------------------|
+| AKOMEL NH | Aceite de palma Malasia (FOB + flete + TRM) | COP/KG | Granel, Sin Lecitina Caja 15Kg, Saborizado Caja 15Kg |
+| CEBES MC 35 | Palmiste Malasia (CIF + flete + arancel + TRM) | COP/KG | CEBES MC 35 |
+| ALMIDÓN | Maiz CBOT ZC (¢/bu + base + flete) | USD/TON | Almidón |
+
+**Intermedios visibles en la UI (auditoria):**
+- AKOMEL: `paso1_*`, `paso2_*` por producto (Granel, SL, Sab)
+- CEBES: `materia_prima`, `precio_mp_planta`, `paso1_cebes`, `paso2_cebes`
+- ALMIDÓN: `precio_fob_usc_bu`, `precio_fob_usd_ton`, `credito_subproductos`,
+  `precio_neto_maiz`
+
+**TRM sincronizada con Xerenity:** Los campos TRM en AKOMEL y CEBES son
+**read-only** y leen de `params.trm` (alimentado por BanRep via `market_prices`).
+Se eliminaron los campos `akomel_trm` y `cebes_trm` independientes para evitar
+desincronizacion. ALMIDÓN no usa TRM porque el precio queda en USD/TON.
+
+**Exposicion Natural USD (input: KG anual por producto):**
+- AKOMEL/CEBES: `Exp. USD = KG × Precio (COP/KG) ÷ TRM`
+- ALMIDÓN:      `Exp. USD = KG × Precio (USD/TON) ÷ 1000`
+- AKOMEL tiene una fila **Total Exposición AKOMEL USD** que suma los 3
+  sub-productos (Granel + SL + Sab)
+
+**Conexion con tabla "Exposición por Commodity":**
+Las 3 formulaciones se agregan a la tabla de resumen como filas independientes
+(AKOMEL, CEBES_MC35, ALMIDON) via `buildSuperFormulaCommodities(params)`
+en `exposureCalculator.ts`. Esta funcion es exportada y la UI la llama en
+cada render (no en el fetch) para que el usuario vea los cambios de KG en
+vivo sin hacer click en "Actualizar". El `Total Commodities` y `Exposición
+Real USD` del Resumen tambien se recalculan en vivo desde los `displayRows`
+del render.
+
+**Flag `includeSuperFormulas`:** `fetchExposure(date, params, { includeSuperFormulas })`
+solo agrega las 3 filas al `ExposureResponse` cuando la empresa es Super.
+`handleFetchExposure` pasa `isSuper = selectedCompanyId === SUPER_ALIMENTOS_ID`.
+
+**Parametros nuevos en `ExposureParams`:** 30+ campos opcionales prefijados
+`akomel_*`, `cebes_*`, `almidon_*` + inputs `kg_akomel_granel_anual`,
+`kg_akomel_sl_anual`, `kg_akomel_sab_anual`, `kg_cebes_anual`, `kg_almidon_anual`.
+Defaults en `DEFAULT_EXPOSURE_PARAMS` (tomados del instructivo Python con
+valores actuales de la hoja de Super).
+
+**Validacion matematica:** 8/8 asserts del instructivo Python pasan
+(AKOMEL Granel/SL/Sab, CEBES, ALMIDÓN precios intermedios y finales).
+
+**Diseno UI:** las divisiones internas de cada tarjeta (AKOMEL NH Granel,
+Base Proceso, CEBES MC 35, etc.) se renderizan como encabezados de seccion
+con bold + fondo `#f1f5f9` + bordes para separar visualmente cada bloque
+de calculos.
+
+**Metodologia:** el tab "Metodología — Exposición" (boton al lado de
+Actualizar) incluye las formulas paso a paso de AKOMEL/CEBES/ALMIDÓN y
+explica la conexion en vivo entre las tarjetas y la tabla de resumen.
+
 ### Sidebar: rename "Commodities" → "Exposición" (abril 2026)
 
 El item del sidebar que apunta a `/risk-management` ahora se llama
