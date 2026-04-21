@@ -520,6 +520,59 @@ KC requiere `MIDPOINT` y descarga en chunks de 60 dias. Duraciones mayores
 (e.g. 480d) causan timeout. El notebook `cafe.ipynb` incluye funcion
 `discover_contracts()` para la primera ejecucion (JSON vacio).
 
+### ACEITE_PALMA / FCPO collector (Bursa Malaysia, abril 2026)
+
+Collector de futuros de aceite de palma crudo (Crude Palm Oil, symbol FCPO)
+en Bursa Malaysia Derivatives. Agregado a `COMMODITY_CONFIG`, `JSON_PATHS`,
+`COLLECTORS` y a las 4 commodities de Super de Alimentos
+(`risk_company_config`) junto con MAIZ, AZUCAR y CACAO.
+
+| Config | Valor |
+|--------|-------|
+| Symbol | FCPO |
+| Exchange | BURSAMY (Bursa Malaysia Derivatives) |
+| Moneda | MYR (Ringgit Malayo) |
+| Meses | F, G, H, J, K, M, N, Q, U, V, X, Z (12 meses) |
+| Multiplier | 25 toneladas métricas por contrato |
+| Expiry | ~dia 15 del mes del contrato |
+| Notebook | `gestion_de_riesgos/collectors/ibkr/aceite_palma.ipynb` |
+| JSON | `data_fcpo.json` |
+| whatToShow | `MIDPOINT` (cae a TRADES/BID_ASK) |
+| useRTH | `False` (mercado asiático, sesión nocturna en UTC-5) |
+| Chunks | 250 días (cap para evitar timeouts en requests largas) |
+| Chart color | `#dc2626` (rojo) |
+
+**BLOQUEADOR ACTIVO (abril 2026) — no se pudo poblar data aun:**
+La cuenta de IBKR de Daniel no tiene subscripción a Bursa Malaysia Derivatives.
+Síntomas verificados corriendo el notebook con TWS abierto:
+- `reqMatchingSymbolsAsync('FCPO')` solo retorna el índice `FCPO.MY` en BURSAMY
+  (secType=IND, conId 689358788), NO los futuros mensuales
+- Intentar calificar cualquier futuro FCPO en cualquier exchange
+  (BURSAMY, MDEX, BMDX, BMDE, BMD, BURSA, KLSE, SGX) retorna
+  `Error 200: No se encuentra definición del activo solicitado` o
+  `El destino o la bolsa seleccionados no son válidos`
+- Pedir data histórica del índice retorna
+  `No data of type EODChart is available for the exchange 'BURSAMY'`
+
+**Para desbloquear** (pendiente decisión del usuario):
+- **Opción A:** subscribir a "Bursa Malaysia Derivatives (Top-of-Book)" en IBKR
+  Client Portal → Settings → Market Data Subscriptions (~USD 6-10/mes).
+  Cuando se active, re-correr `aceite_palma.ipynb` sin cambios de código.
+- **Opción B:** escribir un collector alternativo desde Yahoo Finance
+  (ticker `KPO=F`, front-month continuo) o MPOB — solo una serie diaria,
+  no la curva completa, pero suficiente para Rolling VaR y matrices.
+- **Opción C:** usar soybean oil (ZL, CBOT) como proxy correlacionado (~0.8).
+
+**Estado del codigo:**
+- `PalmOilCollector` clase, `COMMODITY_CONFIG['ACEITE_PALMA']`,
+  `JSON_PATHS['ACEITE_PALMA']` y `COLLECTORS['ACEITE_PALMA']` ya registrados.
+- `COMMODITY_TEMPLATES` en `xerenity-fe/src/lib/risk/companyConfig.ts`
+  incluye ACEITE_PALMA para que otras empresas lo puedan seleccionar en el setup.
+- Super de Alimentos ya tiene ACEITE_PALMA en sus commodities (PATCH a
+  `risk_company_config`), así que el asset aparece en Benchmark, Rolling VaR,
+  Matrices y Portafolio GR — simplemente muestra precios vacios hasta que
+  `risk_prices` tenga data.
+
 ### Collectors de precios
 
 Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
@@ -529,6 +582,15 @@ Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
 | `collect_all(start, end)` | Sube precios del front contract a `risk_prices` |
 | `collect_all_contracts(start?, end?)` | Sube precios de TODOS los contratos a `risk_prices_all_contracts` |
 | `IBUpdater.update_all()` | Actualiza JSONs locales desde TWS via ib_async |
+
+Registry `COLLECTORS` en `base_collector.py`:
+`MAIZ` (CornCollector), `AZUCAR` (SugarCollector), `CACAO` (CocoaCollector),
+`CAFE` (CoffeeCollector), `ACEITE_PALMA` (PalmOilCollector — bloqueado por
+subscripción IBKR), `USD` (TRMCollector).
+
+Cuando `update_all()` corre, procesa los commodities secuencialmente.
+El error de subscripción de FCPO no bloquea los demás — cada collector
+maneja sus propias excepciones y retorna `{'status': 'error', ...}` si falla.
 
 Para actualizar precios:
 1. Abrir TWS

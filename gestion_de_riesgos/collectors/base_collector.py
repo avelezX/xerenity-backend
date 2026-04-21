@@ -34,6 +34,7 @@ JSON_PATHS = {
     'AZUCAR': DATA_DIR / 'data_sb.json',
     'CACAO': DATA_DIR / 'data_cc.json',
     'CAFE': DATA_DIR / 'data_kc.json',
+    'ACEITE_PALMA': DATA_DIR / 'data_fcpo.json',
 }
 
 TRM_EXCEL_PATH = DATA_DIR / 'trm.xlsx'
@@ -90,6 +91,20 @@ COMMODITY_CONFIG = {
         'expiry_day': 19,          # ICE Coffee: ~19 del mes anterior al contrato
         'expiry_month_offset': -1,  # Vence en el mes anterior al mes del contrato
         'roll_days_before': 10,
+    },
+    'ACEITE_PALMA': {
+        'symbol': 'FCPO',
+        'exchanges': ['MDEX', 'BMDX'],   # Bursa Malaysia Derivatives
+        'months': {
+            'F': '01', 'G': '02', 'H': '03', 'J': '04',
+            'K': '05', 'M': '06', 'N': '07', 'Q': '08',
+            'U': '09', 'V': '10', 'X': '11', 'Z': '12',
+        },
+        'code_pattern': r'FCPO[FGHJKMNQUVXZ]\d{2}',
+        'expiry_day': 15,           # FCPO vence ~15 del mes del contrato
+        'expiry_month_offset': 0,
+        'roll_days_before': 10,
+        'currency': 'MYR',          # Precio en Ringgit Malayo
     },
 }
 
@@ -436,6 +451,18 @@ class CoffeeCollector(FuturesJSONCollector):
         )
 
 
+class PalmOilCollector(FuturesJSONCollector):
+    """Collector para futuros de Aceite de Palma (FCPO) - Bursa Malaysia via IB.
+    Precio en MYR/ton (25 toneladas métricas por contrato)."""
+
+    def __init__(self):
+        super().__init__(
+            'ACEITE_PALMA',
+            JSON_PATHS['ACEITE_PALMA'],
+            COMMODITY_CONFIG['ACEITE_PALMA'],
+        )
+
+
 class TRMCollector(BaseCollector):
     """
     Collector para TRM (USD/COP).
@@ -694,6 +721,7 @@ COLLECTORS = {
     'AZUCAR': SugarCollector,
     'CACAO': CocoaCollector,
     'CAFE': CoffeeCollector,
+    'ACEITE_PALMA': PalmOilCollector,
     'USD': TRMCollector,
 }
 
