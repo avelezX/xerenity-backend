@@ -131,6 +131,9 @@ curl -s -X POST http://localhost:8000/risk_benchmark_factors \
 - `POST /risk_futures_portfolio_delete` — eliminar posicion
 - `POST /risk_futures_portfolio_edit` — editar campos de posicion
 
+**USDCOP Calculator:**
+- `GET  /usdcop_calculator` — TRM spot + volatilidad rolling 180d (diaria/anual)
+
 **Pricing API:**
 - `POST /pricing/curves/build` — construir curvas (IBR, SOFR, NDF, TES)
 - `GET  /pricing/curves/status` — estado de curvas
@@ -462,6 +465,114 @@ en un PR aparte porque requiere migrar datos existentes.
 | `trading.company` | Global | N/A (es la tabla de empresas legacy) |
 | `xerenity.companies` | Global | N/A (tabla de empresas nueva, mismos UUIDs que trading.company) |
 
+### Precios Locales de Café (tab condicional, abril 2026)
+
+Tab **"Precios Locales"** (icono faMugHot) en `/risk-management` que aparece
+**solo para empresas que tienen CAFE** en `risk_company_config.commodities`.
+
+Fuente: `xerenity.coffee_prices` (RLS desactivado, GRANT a authenticated).
+
+| Columna | Tipo | Descripcion |
+|---------|------|-------------|
+| `id` | UUID | PK |
+| `fecha` | DATE | Fecha del precio |
+| `fuente` | TEXT | `'FNC'` o `'ANSERMA'` |
+| `tipo_precio` | TEXT | Tipo de precio (6 tipos) |
+| `valor` | TEXT | Precio en COP (parsear a number) |
+| `unidad` | TEXT | `'COP'` |
+
+**Tipos de precio:**
+- **FNC:** `precio_interno_carga` (Precio Interno por Carga de 125 Kg)
+- **ANSERMA:** `precio_base_f90`, `precio_ref_f94`, `precio_nespresso_f90`,
+  `precio_cp_creciente_f90`, `precio_humedo_cereza`
+
+**UI — dos graficas separadas:**
+1. **Cooperativa de Anserma** — LineChart con 5 series, eje Y con zoom
+   al rango real (`dataMin - 5000` a `dataMax + 5000`) para evidenciar
+   variaciones de precio. Tabla con ultimas 10 fechas debajo.
+2. **Fondo Nacional de Cafeteros (FNC)** — LineChart roja con selector
+   de rango de fechas (Desde/Hasta) para que el usuario elija el periodo.
+   Tabla filtrada debajo.
+
+**Frontend:**
+- `fetchCoffeePrices()` en `supabaseRisk.ts` — query directa a Supabase
+- Tab dinámico: se agrega al array `pageTabs` via `useEffect` que detecta
+  `hasCafe` (si `companyConfig.commodities` contiene un asset `'CAFE'`)
+
+### CAFE collector (ICE KC, abril 2026)
+
+Nuevo collector de futuros de cafe (Coffee C, symbol KC) en ICE/NYBOT.
+Agregado a `COMMODITY_CONFIG`, `JSON_PATHS`, `COLLECTORS` y `get_collectors_status`.
+
+| Config | Valor |
+|--------|-------|
+| Symbol | KC |
+| Exchange | NYBOT / ICEUS |
+| Meses | H (Mar), K (May), N (Jul), U (Sep), Z (Dec) |
+| Multiplier | 37,500 lbs |
+| Notebook | `gestion_de_riesgos/collectors/ibkr/cafe.ipynb` |
+| JSON | `data_kc.json` (en DATA_DIR de SharePoint) |
+| whatToShow | `MIDPOINT` (TRADES no funciona para KC en IBKR, timeout) |
+| Chunks | 60 dias (duraciones > 60d causan timeout en IBKR para KC) |
+
+**Nota IBKR para CAFE:** a diferencia de MAIZ/AZUCAR/CACAO que usan `TRADES`,
+KC requiere `MIDPOINT` y descarga en chunks de 60 dias. Duraciones mayores
+(e.g. 480d) causan timeout. El notebook `cafe.ipynb` incluye funcion
+`discover_contracts()` para la primera ejecucion (JSON vacio).
+
+### ACEITE_PALMA / FCPO collector (Bursa Malaysia, abril 2026)
+
+Collector de futuros de aceite de palma crudo (Crude Palm Oil, symbol FCPO)
+en Bursa Malaysia Derivatives. Agregado a `COMMODITY_CONFIG`, `JSON_PATHS`,
+`COLLECTORS` y a las 4 commodities de Super de Alimentos
+(`risk_company_config`) junto con MAIZ, AZUCAR y CACAO.
+
+| Config | Valor |
+|--------|-------|
+| Symbol | FCPO |
+| Exchange | BURSAMY (Bursa Malaysia Derivatives) |
+| Moneda | MYR (Ringgit Malayo) |
+| Meses | F, G, H, J, K, M, N, Q, U, V, X, Z (12 meses) |
+| Multiplier | 25 toneladas métricas por contrato |
+| Expiry | ~dia 15 del mes del contrato |
+| Notebook | `gestion_de_riesgos/collectors/ibkr/aceite_palma.ipynb` |
+| JSON | `data_fcpo.json` |
+| whatToShow | `MIDPOINT` (cae a TRADES/BID_ASK) |
+| useRTH | `False` (mercado asiático, sesión nocturna en UTC-5) |
+| Chunks | 250 días (cap para evitar timeouts en requests largas) |
+| Chart color | `#dc2626` (rojo) |
+
+**BLOQUEADOR ACTIVO (abril 2026) — no se pudo poblar data aun:**
+La cuenta de IBKR de Daniel no tiene subscripción a Bursa Malaysia Derivatives.
+Síntomas verificados corriendo el notebook con TWS abierto:
+- `reqMatchingSymbolsAsync('FCPO')` solo retorna el índice `FCPO.MY` en BURSAMY
+  (secType=IND, conId 689358788), NO los futuros mensuales
+- Intentar calificar cualquier futuro FCPO en cualquier exchange
+  (BURSAMY, MDEX, BMDX, BMDE, BMD, BURSA, KLSE, SGX) retorna
+  `Error 200: No se encuentra definición del activo solicitado` o
+  `El destino o la bolsa seleccionados no son válidos`
+- Pedir data histórica del índice retorna
+  `No data of type EODChart is available for the exchange 'BURSAMY'`
+
+**Para desbloquear** (pendiente decisión del usuario):
+- **Opción A:** subscribir a "Bursa Malaysia Derivatives (Top-of-Book)" en IBKR
+  Client Portal → Settings → Market Data Subscriptions (~USD 6-10/mes).
+  Cuando se active, re-correr `aceite_palma.ipynb` sin cambios de código.
+- **Opción B:** escribir un collector alternativo desde Yahoo Finance
+  (ticker `KPO=F`, front-month continuo) o MPOB — solo una serie diaria,
+  no la curva completa, pero suficiente para Rolling VaR y matrices.
+- **Opción C:** usar soybean oil (ZL, CBOT) como proxy correlacionado (~0.8).
+
+**Estado del codigo:**
+- `PalmOilCollector` clase, `COMMODITY_CONFIG['ACEITE_PALMA']`,
+  `JSON_PATHS['ACEITE_PALMA']` y `COLLECTORS['ACEITE_PALMA']` ya registrados.
+- `COMMODITY_TEMPLATES` en `xerenity-fe/src/lib/risk/companyConfig.ts`
+  incluye ACEITE_PALMA para que otras empresas lo puedan seleccionar en el setup.
+- Super de Alimentos ya tiene ACEITE_PALMA en sus commodities (PATCH a
+  `risk_company_config`), así que el asset aparece en Benchmark, Rolling VaR,
+  Matrices y Portafolio GR — simplemente muestra precios vacios hasta que
+  `risk_prices` tenga data.
+
 ### Collectors de precios
 
 Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
@@ -472,18 +583,206 @@ Funciones en `gestion_de_riesgos/collectors/base_collector.py`:
 | `collect_all_contracts(start?, end?)` | Sube precios de TODOS los contratos a `risk_prices_all_contracts` |
 | `IBUpdater.update_all()` | Actualiza JSONs locales desde TWS via ib_async |
 
+Registry `COLLECTORS` en `base_collector.py`:
+`MAIZ` (CornCollector), `AZUCAR` (SugarCollector), `CACAO` (CocoaCollector),
+`CAFE` (CoffeeCollector), `ACEITE_PALMA` (PalmOilCollector — bloqueado por
+subscripción IBKR), `USD` (TRMCollector).
+
+Cuando `update_all()` corre, procesa los commodities secuencialmente.
+El error de subscripción de FCPO no bloquea los demás — cada collector
+maneja sus propias excepciones y retorna `{'status': 'error', ...}` si falla.
+
 Para actualizar precios:
 1. Abrir TWS
 2. `await IBUpdater().update_all()` — actualiza JSONs locales
 3. `collect_all(start, end)` — sube front contract a Supabase (para VaR)
 4. `collect_all_contracts()` — sube todos los contratos (para mark-to-market del Portafolio GR)
 
+### Calculadora USDCOP (abril 2026)
+
+Tab **"Calculadora USDCOP"** (icono faCalculator) en `/risk-management`,
+disponible para **TODAS las empresas** (no condicional en commodity).
+
+**Backend:** `GET /usdcop_calculator` en `server/usdcop_calculator/usdcop_calculator.py`.
+Lee TRM de `xerenity.banrep_series_value_v2` (serie BanRep 25), calcula vol
+rolling 180d con log-returns, retorna `{ trm, vol_diaria, vol_anual, fecha }`.
+
+**Frontend:** `fetchUsdCopCalculator()` en `models/risk/usdcopCalculator.ts`.
+Consume `NEXT_PUBLIC_PYSDK_URL/usdcop_calculator`.
+
+**UI:**
+- 4 stat cards: TRM actual, Fecha, Vol diaria (180d), Vol anual (180d)
+- 2 sliders: Dias a pronosticar (1-180), Desviaciones estandar (0.5-3.0 σ)
+- 4 result cards: Piso, Techo, Amplitud, Confianza (%)
+- Cono de incertidumbre (Recharts ComposedChart): Area Techo (verde) +
+  Area Piso (rojo) + Line TRM (azul punteado)
+- Seccion de justificacion estadistica: rolling 180d, niveles sigma,
+  regla de raiz del tiempo, limitaciones del modelo, guia practica
+
+**Calculo:** `bandAt(t, k) = TRM × (1 ± σ_d × √t × k)` donde σ_d = vol_diaria.
+
+### CommoditySetup — USD-only flow (abril 2026)
+
+La pantalla de setup de commodities ahora permite guardar con **0 commodities**
+(solo USD). USD se incluye automaticamente via `currency_asset` del config.
+
+- Tarjeta fija "USD (fijo) — BanRep TRM" en el grid (azul, no clickeable)
+- Boton "Continuar solo con USD" si no hay commodities seleccionados
+- Boton "Configurar N commodities + USD" si hay seleccion
+- Texto explicativo: "USD/COP (TRM) se incluye automaticamente"
+- Util para empresas que solo gestionan FX (e.g. Los Coches)
+
+### Rolling VaR — selectedAsset dinamico (fix abril 2026)
+
+`selectedAsset` ya NO arranca hardcodeado en `'MAIZ'`. Ahora:
+- Arranca vacio (`useState('')`)
+- Un `useEffect` lo sincroniza con `assets[0]` del companyConfig
+- Si la empresa solo tiene USD → Rolling VaR abre en USD
+- Si tiene CAFE → abre en CAFE
+- Si tiene MAIZ, AZUCAR, CACAO → abre en MAIZ (primer asset)
+- Si el asset seleccionado ya no esta en la lista (cambio de empresa),
+  se reemplaza automaticamente por el primero disponible
+
+### Resumen Exposicion Compañia — fix de campos (abril 2026)
+
+Bug en `fetchExposure` (`src/models/risk/riskApi.ts`): el resumen mostraba
+"Exposición Ventas Intl." igual al valor de "Exposición Real USD" aunque
+el input del usuario era distinto. Ejemplo concreto con Super de Alimentos:
+- Input Ventas Intl. (USD): `130,025,826`
+- Card mostraba: `82,693,807` (incorrecto, era el Real USD)
+
+**Causa:** el fetcher asignaba `exposicion_ventas_intl: result.exposicion_real_usd`
+en vez de `result.ventas_intl_usd`. Ademas `exposicion_pen` estaba hardcoded a 0.
+
+**Fix (mismo archivo, funcion `fetchExposure`):**
+```ts
+exposicion_ventas_intl: result.ventas_intl_usd,  // antes: result.exposicion_real_usd
+exposicion_pen:         result.ventas_pe_usd,    // antes: 0
+```
+
+**Formula segun la metodologia (tab Exposicion):**
+```
+Exposicion Real USD = Ventas Internacionales (USD) − Total Commodities (USD)
+```
+Para Super: `82,693,807 = 130,025,826 − 47,332,019` ✓
+
+### MAÍZ / GLUCOSA — calculo de # Contratos (abril 2026)
+
+Antes el card MAÍZ/GLUCOSA en el tab Exposicion no mostraba el numero de
+contratos de futuros CBOT ZC necesarios para cubrir la proyeccion de glucosa.
+Ademas las filas de "Precio Maíz (¢/ton)", "Precio Maíz (USD/ton)", "Crédito
+Subproductos", "Glucosa Materia", "Precio Glucosa" mostraban "—" porque el
+UI accedia a `mz.precio_usd_ton` pero el calculador los guarda en
+`mz.detalle.precio_usd_ton`.
+
+**Cambios en `src/lib/risk/exposureCalculator.ts`:**
+
+Constantes nuevas:
+```ts
+const TON_PER_BUSHEL = 0.0254;              // 1 bushel de maiz = 25.4 kg
+const CORN_BUSHELS_CONTRATO = 5000;         // CBOT Corn futures = 5,000 bu
+const CORN_TON_CONTRATO = 5000 × 0.0254;    // = 127 toneladas/contrato
+```
+
+Calculo correcto de # contratos en `calcularMaiz()`:
+```
+TON Maíz reales = TON Glucosa (proyeccion) × Factor Maíz→Glucosa
+                = 27,324 × 1.495
+                = 40,849 toneladas
+
+# Contratos   = TON Maíz reales ÷ TON Contrato CBOT ZC
+              = 40,849 ÷ 127
+              = 321.65 contratos
+```
+
+**Interpretacion:** si Super quisiera cobertura 100% de su exposicion al precio
+del maiz, tendria que comprar ~322 contratos ZC en CBOT. Es el equivalente al
+calculo que ya existia para AZUCAR (~783 contratos).
+
+`detalle` del `CommodityExposure` ahora incluye: `precio_cent_ton`,
+`precio_glucosa`, `ton_contrato` (127), `factor_maiz_glucosa`. Antes solo
+estaban `precio_usd_ton`, `credito_subproductos`, `glucosa_materia`, etc.
+
+UI actualizado en `risk-management/index.tsx` para leer desde
+`mz.detalle.*` con cast `as Record<string, number>` (el tipo
+`CommodityExposure` declara `detalle` como `unknown`). Agregadas 3 filas
+nuevas al card: TON Contrato (CBOT ZC), TON Maíz reales, # Contratos.
+
+### Formulaciones Super de Alimentos: AKOMEL, CEBES, ALMIDÓN (abril 2026)
+
+Tab **Exposición** en `/risk-management` ahora muestra 3 tarjetas adicionales
+condicionales en `company_id === SUPER_ALIMENTOS_ID` con el calculo de precio
+unitario por formulacion — port fiel del instructivo Python de Super.
+
+| Tarjeta | Materia prima | Unidad precio final | Productos derivados |
+|---------|---------------|---------------------|---------------------|
+| AKOMEL NH | Aceite de palma Malasia (FOB + flete + TRM) | COP/KG | Granel, Sin Lecitina Caja 15Kg, Saborizado Caja 15Kg |
+| CEBES MC 35 | Palmiste Malasia (CIF + flete + arancel + TRM) | COP/KG | CEBES MC 35 |
+| ALMIDÓN | Maiz CBOT ZC (¢/bu + base + flete) | USD/TON | Almidón |
+
+**Intermedios visibles en la UI (auditoria):**
+- AKOMEL: `paso1_*`, `paso2_*` por producto (Granel, SL, Sab)
+- CEBES: `materia_prima`, `precio_mp_planta`, `paso1_cebes`, `paso2_cebes`
+- ALMIDÓN: `precio_fob_usc_bu`, `precio_fob_usd_ton`, `credito_subproductos`,
+  `precio_neto_maiz`
+
+**TRM sincronizada con Xerenity:** Los campos TRM en AKOMEL y CEBES son
+**read-only** y leen de `params.trm` (alimentado por BanRep via `market_prices`).
+Se eliminaron los campos `akomel_trm` y `cebes_trm` independientes para evitar
+desincronizacion. ALMIDÓN no usa TRM porque el precio queda en USD/TON.
+
+**Exposicion Natural USD (input: KG anual por producto):**
+- AKOMEL/CEBES: `Exp. USD = KG × Precio (COP/KG) ÷ TRM`
+- ALMIDÓN:      `Exp. USD = KG × Precio (USD/TON) ÷ 1000`
+- AKOMEL tiene una fila **Total Exposición AKOMEL USD** que suma los 3
+  sub-productos (Granel + SL + Sab)
+
+**Conexion con tabla "Exposición por Commodity":**
+Las 3 formulaciones se agregan a la tabla de resumen como filas independientes
+(AKOMEL, CEBES_MC35, ALMIDON) via `buildSuperFormulaCommodities(params)`
+en `exposureCalculator.ts`. Esta funcion es exportada y la UI la llama en
+cada render (no en el fetch) para que el usuario vea los cambios de KG en
+vivo sin hacer click en "Actualizar". El `Total Commodities` y `Exposición
+Real USD` del Resumen tambien se recalculan en vivo desde los `displayRows`
+del render.
+
+**Flag `includeSuperFormulas`:** `fetchExposure(date, params, { includeSuperFormulas })`
+solo agrega las 3 filas al `ExposureResponse` cuando la empresa es Super.
+`handleFetchExposure` pasa `isSuper = selectedCompanyId === SUPER_ALIMENTOS_ID`.
+
+**Parametros nuevos en `ExposureParams`:** 30+ campos opcionales prefijados
+`akomel_*`, `cebes_*`, `almidon_*` + inputs `kg_akomel_granel_anual`,
+`kg_akomel_sl_anual`, `kg_akomel_sab_anual`, `kg_cebes_anual`, `kg_almidon_anual`.
+Defaults en `DEFAULT_EXPOSURE_PARAMS` (tomados del instructivo Python con
+valores actuales de la hoja de Super).
+
+**Validacion matematica:** 8/8 asserts del instructivo Python pasan
+(AKOMEL Granel/SL/Sab, CEBES, ALMIDÓN precios intermedios y finales).
+
+**Diseno UI:** las divisiones internas de cada tarjeta (AKOMEL NH Granel,
+Base Proceso, CEBES MC 35, etc.) se renderizan como encabezados de seccion
+con bold + fondo `#f1f5f9` + bordes para separar visualmente cada bloque
+de calculos.
+
+**Metodologia:** el tab "Metodología — Exposición" (boton al lado de
+Actualizar) incluye las formulas paso a paso de AKOMEL/CEBES/ALMIDÓN y
+explica la conexion en vivo entre las tarjetas y la tabla de resumen.
+
+### Sidebar: rename "Commodities" → "Exposición" (abril 2026)
+
+El item del sidebar que apunta a `/risk-management` ahora se llama
+**Exposición** en lugar de **Commodities**. Refleja mejor el contenido
+del modulo (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR,
+Precios Locales*, Calculadora USDCOP). Cambio de label solamente; la
+ruta `/risk-management` y el archivo `SidebarNavList.tsx` solo cambian
+la prop `name`.
+
 ### Sidebar consolidado (abril 2026)
 
 ```
 Riesgos (solo super_admin y corp_admin)
   ├── Resumen            → /risk-resumen      (dashboard consolidado con selector de mes)
-  ├── Commodities        → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR)
+  ├── Exposición         → /risk-management   (Benchmark, Rolling VaR, Exposicion, Matrices, Portafolio GR, Precios Locales*, Calculadora USDCOP)
   ├── Creditos           → /loans
   ├── Portafolio OTC     → /portfolio
   ├── NDF Pricer         → /ndf-pricer
