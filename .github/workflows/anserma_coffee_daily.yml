@@ -1,0 +1,29 @@
+name: Load DAILY Anserma Coffee Prices
+run-name: Loading DAILY Anserma Coffee Prices
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 23:00 UTC = 18:00 COT, weekdays (Colombia does not observe DST)
+    - cron: '0 23 * * 1-5'
+
+jobs:
+  collect_anserma_coffee:
+    runs-on: ubuntu-latest
+    container:
+      image: avelezxerenity/xerenity:latest
+      options: --cpus 1
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt --quiet
+
+      - name: Collect Anserma coffee prices from public Google Sheet
+        run: python run_collect_anserma_coffee.py
+        env:
+          XTY_URL:          ${{ secrets.XTY_URL }}
+          XTY_TOKEN:        ${{ secrets.XTY_TOKEN }}
+          COLLECTOR_BEARER: ${{ secrets.COLLECTOR_BEARER }}
