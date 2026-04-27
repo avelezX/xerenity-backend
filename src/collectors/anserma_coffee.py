@@ -14,6 +14,8 @@ are not present as text in the HTML, so parsing is positional. If the number of
 price cells is not exactly 5, the parse aborts with an explicit error.
 """
 
+from __future__ import annotations
+
 import re
 import requests
 from datetime import date

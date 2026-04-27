@@ -7,6 +7,8 @@ Source: https://federaciondecafeteros.org/wp/
   - Free, no API key required.
 """
 
+from __future__ import annotations
+
 import re
 import html
 import requests
