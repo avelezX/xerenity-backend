@@ -1040,6 +1040,66 @@ def _price_xccy_full(xccy_pricer, pos: dict, cm, ibr_overnight: float, sofr_over
     return out
 
 
+def _classify_pricing_status(
+    row: dict,
+    critical_fields: list,
+    optional_fields: list = None,
+) -> dict:
+    """Annotate a priced row with `pricing_status` and `missing_fields`.
+
+    Phase 3.3 of epic xerenity-fe#300: makes "no value" explicit in the wire
+    format so the frontend can stop guessing whether a `null`/`0` means
+    "computed as zero" vs "couldn't be computed".
+
+    - `degraded`: row.error is set OR any field in `critical_fields` is None.
+    - `partial`: all critical fields are present, but some `optional_fields`
+                 are None (typical for a row missing carry or DV01 because
+                 a curve was unavailable for that tenor).
+    - `complete`: every listed field is present and finite.
+
+    `missing_fields` is the list of *all* missing field names, both critical
+    and optional. The frontend reads this to render specific error tooltips
+    instead of a generic "—".
+
+    Backwards-compatible: callers that don't know about these new keys simply
+    ignore them.
+    """
+    if optional_fields is None:
+        optional_fields = []
+
+    if row.get("error"):
+        row["pricing_status"] = "degraded"
+        row["missing_fields"] = []
+        return row
+
+    missing_critical = [f for f in critical_fields if row.get(f) is None]
+    missing_optional = [f for f in optional_fields if row.get(f) is None]
+    missing = missing_critical + missing_optional
+
+    if missing_critical:
+        status = "degraded"
+    elif missing_optional:
+        status = "partial"
+    else:
+        status = "complete"
+
+    row["pricing_status"] = status
+    row["missing_fields"] = missing
+    return row
+
+
+# Critical fields per instrument type — if any is None the row is degraded.
+_XCCY_CRITICAL = ["npv_cop", "npv_usd"]
+_XCCY_OPTIONAL = [
+    "carry_cop", "dv01_ibr", "dv01_sofr", "pnl_rate_cop", "pnl_fx_cop",
+    "fx_delta", "par_basis_bps",
+]
+_NDF_CRITICAL = ["npv_cop", "npv_usd"]
+_NDF_OPTIONAL = ["forward", "carry_cop_daily", "dv01_cop", "dv01_usd", "delta_cop", "fx_delta"]
+_IBR_CRITICAL = ["npv"]
+_IBR_OPTIONAL = ["fair_rate", "dv01", "carry_daily_cop", "ibr_overnight_pct"]
+
+
 @csrf_exempt
 def pricing_portfolio_reprice(request):
     """Full portfolio reprice: carry, DV01, P&L, cashflows per position.
@@ -1049,6 +1109,10 @@ def pricing_portfolio_reprice(request):
     Each position uses 'id' (not 'position_id') for identification.
 
     Response keys: xccy_results, ndf_results, ibr_swap_results, summary
+
+    Each result row is annotated with `pricing_status` and `missing_fields`
+    (Phase 3.3) so the frontend can distinguish "computed as zero" from
+    "couldn't be computed" without inferring from null coalescing.
     """
     cm = _get_cm()
     loader = _get_loader()
@@ -1114,36 +1178,36 @@ def pricing_portfolio_reprice(request):
             try:
                 row = _price_ndf_full(ndf_pricer, pos, cm, ibr_overnight, sofr_overnight)
                 row["id"] = pos_id
-                ndf_results.append(row)
             except Exception as exc:
-                ndf_results.append({
+                row = {
                     "id": pos_id, "error": str(exc),
                     "npv_cop": 0.0, "npv_usd": 0.0,
-                })
+                }
+            ndf_results.append(_classify_pricing_status(row, _NDF_CRITICAL, _NDF_OPTIONAL))
 
         for pos in body.get("ibr_swap_positions", []):
             pos_id = pos.get("id") or pos.get("position_id")
             try:
                 row = _price_ibr_full(ibr_pricer, pos, cm, ibr_overnight)
                 row["id"] = pos_id
-                ibr_results.append(row)
             except Exception as exc:
-                ibr_results.append({
+                row = {
                     "id": pos_id, "error": str(exc),
                     "npv": 0.0,
-                })
+                }
+            ibr_results.append(_classify_pricing_status(row, _IBR_CRITICAL, _IBR_OPTIONAL))
 
         for pos in body.get("xccy_positions", []):
             pos_id = pos.get("id") or pos.get("position_id")
             try:
                 row = _price_xccy_full(xccy_pricer, pos, cm, ibr_overnight, sofr_overnight)
                 row["id"] = pos_id
-                xccy_results.append(row)
             except Exception as exc:
-                xccy_results.append({
+                row = {
                     "id": pos_id, "error": str(exc),
                     "npv_cop": 0.0, "npv_usd": 0.0, "cashflows": [],
-                })
+                }
+            xccy_results.append(_classify_pricing_status(row, _XCCY_CRITICAL, _XCCY_OPTIONAL))
 
         spot = cm.fx_spot or 1.0
         total_npv_cop = (
