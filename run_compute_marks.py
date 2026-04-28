@@ -48,7 +48,19 @@ def compute_marks(target_date: str = None) -> dict:
     if fx_spot is None:
         raise RuntimeError("No FX spot available")
     if cop_fwd.empty:
-        raise RuntimeError("No COP forward data available")
+        raise RuntimeError(
+            "No COP forward data available within staleness window — "
+            "FXEmpire collector may be broken. Check run_collect_fxempire_cop."
+        )
+
+    # Warn when cop_fwd lags target_date (weekend/holiday fallback).
+    cop_fwd_fecha = str(cop_fwd["fecha"].iloc[0]) if "fecha" in cop_fwd.columns else None
+    resolved_target = target_date or date.today().isoformat()
+    if cop_fwd_fecha and cop_fwd_fecha != resolved_target:
+        print(
+            f"  ⚠ cop_fwd_points is from {cop_fwd_fecha} (target {resolved_target}) — "
+            f"forward points will be anchored to SN mid of that date."
+        )
 
     # ── Build curves ──
     cm.build_ibr_curve(ibr_quotes)
@@ -66,20 +78,32 @@ def compute_marks(target_date: str = None) -> dict:
         sofr_payload[str(m)] = round(cm.sofr_zero_rate(dt) * 100, 6)
 
     # ── NDF forwards by tenor_months ──
-    # Use mid (outright forward) directly from cop_fwd_points — no SOFR bootstrap needed.
-    # mid IS the market-observed outright forward (e.g. 3,775.69 for 1M).
-    # fwd_pts_cop = mid - fx_spot anchors the differential to the SET-ICAP spot.
+    # The cop_fwd_points rows for a given date hold outright forwards scraped
+    # from FXEmpire. When cop_fwd's fecha matches target, fwd_pts_cop = mid
+    # - fx_spot is correct. When it lags (weekend/holiday), we'd inject the
+    # stale-vs-fresh spot gap into the forward points, which previously made
+    # 1M fwd pts ~5x too high. Fix: compute the forward-points differential
+    # against the SN mid from the SAME scrape, then re-anchor to today's
+    # fx_spot. This keeps points self-consistent regardless of date lag.
+    sn_rows = cop_fwd[cop_fwd["tenor_months"] == 0] if not cop_fwd.empty else None
+    sn_mid = (
+        float(sn_rows.iloc[0]["mid"])
+        if sn_rows is not None and not sn_rows.empty and sn_rows.iloc[0].get("mid") is not None
+        else fx_spot
+    )
+
     ndf_payload = {}
     for _, row in cop_fwd.iterrows():
         months = int(row["tenor_months"])
         if months <= 0 or row.get("mid") is None:
             continue
-        f_market = float(row["mid"])
-        fwd_pts_cop = round(f_market - fx_spot, 4)
+        mid_stale = float(row["mid"])
+        fwd_pts_cop = round(mid_stale - sn_mid, 4)
+        f_market = round(fx_spot + fwd_pts_cop, 4)
         deval_ea = round(((f_market / fx_spot) ** (12 / months) - 1) * 100, 4)
         ndf_payload[str(months)] = {
             "fwd_pts_cop": fwd_pts_cop,
-            "F_market":    round(f_market, 4),
+            "F_market":    f_market,
             "deval_ea":    deval_ea,
         }
 

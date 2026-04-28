@@ -64,24 +64,36 @@ def _parse_number(text: str) -> float | None:
         return None
 
 
-def _fetch_page() -> str | None:
+def _fetch_page(verbose: bool = True) -> str | None:
     """Fetch the FXEmpire forward rates page HTML."""
     try:
         resp = requests.get(PAGE_URL, headers=HEADERS, timeout=30)
         if resp.status_code == 200:
             return resp.text
-    except requests.RequestException:
-        pass
+        if verbose:
+            print(f"  ⚠ fxempire_cop: GET {PAGE_URL} returned {resp.status_code}.")
+    except requests.RequestException as exc:
+        if verbose:
+            print(f"  ⚠ fxempire_cop: GET {PAGE_URL} raised {type(exc).__name__}: {exc}")
     return None
 
 
-def _parse_forward_rates(html: str) -> list[dict]:
-    """Parse the forward rates table from FXEmpire HTML."""
+def _parse_forward_rates(html: str, verbose: bool = True) -> list[dict]:
+    """
+    Parse the forward rates table from FXEmpire HTML.
+
+    When verbose=True (default for runner), prints diagnostics whenever the
+    table layout doesn't match expectations — this makes it easy to spot
+    HTML changes on the source site that would otherwise cause the scraper
+    to silently return zero rows.
+    """
     soup = BeautifulSoup(html, "lxml")
     rows = []
 
-    # Find the forward rates table — look for tables with tenor keywords
     tables = soup.find_all("table")
+    if verbose and not tables:
+        print(f"  ⚠ fxempire_cop: no <table> elements found (html size={len(html)}).")
+
     target_table = None
     for table in tables:
         text = table.get_text().lower()
@@ -90,17 +102,25 @@ def _parse_forward_rates(html: str) -> list[dict]:
             break
 
     if not target_table:
+        if verbose:
+            print(
+                f"  ⚠ fxempire_cop: forward-rates table not found "
+                f"(scanned {len(tables)} tables; looked for 'month|year' + 'bid|ask')."
+            )
         return rows
 
     tbody = target_table.find("tbody") or target_table
+    seen, skipped_no_tenor, skipped_no_prices = 0, 0, 0
 
     for tr in tbody.find_all("tr"):
         cells = tr.find_all(["td", "th"])
         if len(cells) < 4:
             continue
+        seen += 1
 
         tenor_text = cells[0].get_text().strip().lower()
         if tenor_text not in TENOR_MAP:
+            skipped_no_tenor += 1
             continue
 
         label, months = TENOR_MAP[tenor_text]
@@ -110,6 +130,7 @@ def _parse_forward_rates(html: str) -> list[dict]:
         fwd_points = _parse_number(cells[4].get_text()) if len(cells) > 4 else None
 
         if bid is None and ask is None:
+            skipped_no_prices += 1
             continue
 
         rows.append({
@@ -121,6 +142,13 @@ def _parse_forward_rates(html: str) -> list[dict]:
             "mid": mid,
             "fwd_points": fwd_points,
         })
+
+    if verbose and not rows:
+        print(
+            f"  ⚠ fxempire_cop: parsed 0 rows from target table "
+            f"(scanned={seen} skipped_tenor={skipped_no_tenor} "
+            f"skipped_prices={skipped_no_prices}). FXEmpire HTML may have changed."
+        )
 
     return rows
 
