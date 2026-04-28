@@ -34,11 +34,13 @@ def compute_marks(target_date: str = None) -> dict:
     cm = CurveManager()
 
     # ── Fetch ──
+    # NDF forwards no longer come from FXEmpire — they're derived from
+    # interest rate parity using the IBR + SOFR curves we already build.
+    # See "── NDF outright forwards ──" block below.
     ibr_quotes = loader.fetch_ibr_quotes(target_date=target_date)
     sofr_df    = loader.fetch_sofr_curve(target_date=target_date)
     # Use live SET-ICAP tick here — this is the job that WRITES the mark.
     fx_spot    = loader.fetch_usdcop_spot_live(target_date=target_date)
-    cop_fwd    = loader.fetch_cop_forwards(target_date=target_date)
     sofr_on    = loader.fetch_sofr_spot(target_date=target_date)
 
     if not ibr_quotes:
@@ -47,20 +49,6 @@ def compute_marks(target_date: str = None) -> dict:
         raise RuntimeError("No SOFR data available")
     if fx_spot is None:
         raise RuntimeError("No FX spot available")
-    if cop_fwd.empty:
-        raise RuntimeError(
-            "No COP forward data available within staleness window — "
-            "FXEmpire collector may be broken. Check run_collect_fxempire_cop."
-        )
-
-    # Warn when cop_fwd lags target_date (weekend/holiday fallback).
-    cop_fwd_fecha = str(cop_fwd["fecha"].iloc[0]) if "fecha" in cop_fwd.columns else None
-    resolved_target = target_date or date.today().isoformat()
-    if cop_fwd_fecha and cop_fwd_fecha != resolved_target:
-        print(
-            f"  ⚠ cop_fwd_points is from {cop_fwd_fecha} (target {resolved_target}) — "
-            f"forward points will be anchored to SN mid of that date."
-        )
 
     # ── Build curves ──
     cm.build_ibr_curve(ibr_quotes)
@@ -77,34 +65,32 @@ def compute_marks(target_date: str = None) -> dict:
         dt = cm.valuation_date + ql.Period(m, ql.Months)
         sofr_payload[str(m)] = round(cm.sofr_zero_rate(dt) * 100, 6)
 
-    # ── NDF forwards by tenor_months ──
-    # The cop_fwd_points rows for a given date hold outright forwards scraped
-    # from FXEmpire. When cop_fwd's fecha matches target, fwd_pts_cop = mid
-    # - fx_spot is correct. When it lags (weekend/holiday), we'd inject the
-    # stale-vs-fresh spot gap into the forward points, which previously made
-    # 1M fwd pts ~5x too high. Fix: compute the forward-points differential
-    # against the SN mid from the SAME scrape, then re-anchor to today's
-    # fx_spot. This keeps points self-consistent regardless of date lag.
-    sn_rows = cop_fwd[cop_fwd["tenor_months"] == 0] if not cop_fwd.empty else None
-    sn_mid = (
-        float(sn_rows.iloc[0]["mid"])
-        if sn_rows is not None and not sn_rows.empty and sn_rows.iloc[0].get("mid") is not None
-        else fx_spot
-    )
-
+    # ── NDF outright forwards from interest rate parity ──
+    # F(T) = S × DF_USD(T) / DF_COP(T) — standard textbook IRP.
+    #
+    # Replaces the old FXEmpire scrape entirely. The scraper had been
+    # broken since 2026-03-12 and was producing absurd forward points
+    # (~5x too high) because run_compute_marks kept reusing month-old
+    # mid values against a fresh spot.
+    #
+    # Trade-off: this gives us the *theoretical* forward, not the
+    # market-observed one. The difference (NDF basis) reflects
+    # convertibility risk + cross-currency basis. For a portfolio
+    # mark-to-model with monthly horizons that's fine; if the desk
+    # later needs market basis, add a manual override layer.
+    NDF_TENORS_MONTHS = [1, 2, 3, 6, 9, 12]
     ndf_payload = {}
-    for _, row in cop_fwd.iterrows():
-        months = int(row["tenor_months"])
-        if months <= 0 or row.get("mid") is None:
-            continue
-        mid_stale = float(row["mid"])
-        fwd_pts_cop = round(mid_stale - sn_mid, 4)
-        f_market = round(fx_spot + fwd_pts_cop, 4)
-        deval_ea = round(((f_market / fx_spot) ** (12 / months) - 1) * 100, 4)
+    for months in NDF_TENORS_MONTHS:
+        dt = cm.valuation_date + ql.Period(months, ql.Months)
+        df_sofr = cm.sofr_discount(dt)   # USD-leg DF
+        df_ibr  = cm.ibr_discount(dt)    # COP-leg DF
+        f_market = fx_spot * df_sofr / df_ibr
+        fwd_pts  = f_market - fx_spot
+        deval_ea = (f_market / fx_spot) ** (12 / months) - 1
         ndf_payload[str(months)] = {
-            "fwd_pts_cop": fwd_pts_cop,
-            "F_market":    f_market,
-            "deval_ea":    deval_ea,
+            "fwd_pts_cop": round(fwd_pts, 4),
+            "F_market":    round(f_market, 4),
+            "deval_ea":    round(deval_ea * 100, 4),
         }
 
     return {
@@ -117,7 +103,6 @@ def compute_marks(target_date: str = None) -> dict:
         "loader":      loader,
         "target_date": target_date,
         "sofr_df":     sofr_df,
-        "cop_fwd":     cop_fwd,
     }
 
 
