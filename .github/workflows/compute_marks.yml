@@ -35,13 +35,7 @@ jobs:
           XTY_TOKEN:        ${{ secrets.XTY_TOKEN }}
           COLLECTOR_BEARER: ${{ secrets.COLLECTOR_BEARER }}
 
-      - name: Notify Teams on failure
-        if: failure()
-        run: |
-          if [ -n "$TEAMS_WEBHOOK_URL" ]; then
-            curl -s -X POST "$TEAMS_WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -d "{\"text\": \"compute_marks FAILED — ${{ github.workflow }} run ${{ github.run_id }}\"}"
-          fi
-        env:
-          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+      # Failure handling: run_compute_marks.py is wrapped in monitored_run("compute_marks")
+      # which writes status='failed' + traceback to xerenity.collector_runs. The DB trigger
+      # then dispatches an Adaptive Card to Teams via the alert-dispatcher edge function.
+      # No per-workflow notification step needed.

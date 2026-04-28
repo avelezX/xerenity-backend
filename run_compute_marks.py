@@ -23,6 +23,7 @@ import QuantLib as ql
 
 from pricing.data.market_data import MarketDataLoader
 from pricing.curves.curve_manager import CurveManager
+from src.monitoring import monitored_run
 
 
 def compute_marks(target_date: str = None) -> dict:
@@ -153,4 +154,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with monitored_run("compute_marks"):
+        main()
