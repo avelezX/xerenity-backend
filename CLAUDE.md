@@ -388,6 +388,76 @@ en `gestion_de_riesgos/collectors/base_collector.py`). Si la tabla no tiene
 el contrato/fecha, el frontend cae al fallback del front contract y los
 calculos vuelven a quedar incorrectos para los meses traseros.
 
+### Portafolio GR — Lógica de Px Actual / Px Previo / P&G Mes (mayo 2026)
+
+Las columnas Px Actual y Px Previo del blotter siguen una lógica determinística
+que depende del mes seleccionado en el filtro (`futuresMonth`). Implementación
+en `xerenity-fe/src/lib/risk/futuresCalculator.ts`.
+
+**Setup:**
+- `filterDate = lastDayOfMonth(year, month)` — último día hábil del mes
+  seleccionado (esquiva sábado/domingo, no feriados)
+- `prevMonthLastBD = lastBusinessDayOfPrevMonth(filterDate)` — último día
+  hábil del mes anterior
+
+**Por cada posición con `entry_date ≤ filterDate`:**
+
+```
+Px Actual = findPrice(seriesDates, seriesPrices, filterDate)
+  → última fecha con precio ≤ filterDate (walks DESC, skip nulls)
+
+if (entry_month === filter_month)
+  Px Previo = entry_price
+  precio_previo_date = entry_date
+else
+  Px Previo = findPrice(seriesDates, seriesPrices, prevMonthLastBD)
+  precio_previo_date = prev.date
+
+P&G Mes = (Px Actual − Px Previo) × nominal × multiplier × dirSign × toUsd
+P&G Inicio = (Px Actual − entry_price) × nominal × mult × dirSign × toUsd
+```
+
+**Casos determinísticos:**
+
+| Caso | entry_date | Mes seleccionado | Px Previo | Px Actual | P&G Mes |
+|------|-----------|------------------|-----------|-----------|---------|
+| Nuevo, mes corriente | 2026-04-22 | Abr 2026 | entry @ 22-abr | precio último BD | actual − entry |
+| Cruzando un mes | 2026-03-20 | Abr 2026 | precio 31-mar | precio 30-abr | apr30 − mar31 (MTD) |
+| Cruzando varios | 2026-01-15 | Abr 2026 | precio 31-mar | precio 30-abr | apr30 − mar31 |
+| Volver al mes de entry | 2026-03-20 | Mar 2026 | entry @ 20-mar | precio 31-mar | mar31 − entry |
+| Mes anterior al entry | 2026-03-20 | Feb 2026 | — | — | filtrada |
+
+**Robustez frente a gaps:**
+- `findPrice` walks DESC y skip nulls → si 31-mar es feriado o no hay precio,
+  agarra el último día hábil con dato (30, 29, ...).
+- `lastBusinessDayOfPrevMonth` y `lastBusinessDay` saltan sábado/domingo (no
+  feriados), pero `findPrice` cubre los huecos walking back.
+
+**Headers de columnas:**
+- `Px Actual (YYYY-MM-DD)` — el subtítulo de fecha se muestra porque
+  todas las filas comparten el mismo `current_price_date` (= filterDate
+  o el último día hábil con precio antes de filterDate).
+- `Px Previo` — sin fecha en el header (la fecha varía por fila: entry_date
+  para nuevas vs último BD prev month para viejas). Tooltip por celda
+  (`title="Precio previo del YYYY-MM-DD"`) muestra la fecha real.
+- `Px Compra` — sin fecha en el header (cada fila tiene su propio
+  `entry_date` en la columna Fecha).
+
+**Calendar spread grouping (avelezX/xerenity-fe#364):**
+- Posiciones que comparten `portfolio_id` (LONG + SHORT del mismo asset)
+  se renderizan como 1 fila parent morada colapsable
+- Px Compra/Actual/Previo del parent muestran el **diferencial** del spread
+  (Δ = long − short)
+- P&G Mes/Inicio del parent suma legs (matemáticamente == P&G del spread)
+- Click en ▸/▾ expande para ver legs individuales
+
+**Export PDF / CSV:**
+- PDF: comprimido a JPEG quality 0.82 + scale 1.5 + jsPDF compress=true
+  (~10-20× más chico que la versión PNG @ scale 2 anterior)
+- CSV: nuevo botón verde por tab (Benchmark, Rolling VaR, Exposición,
+  Matrices, Portafolio GR). Extrae todas las `<table>` del tab, separa por
+  sección con header del card precedente, BOM UTF-8 para Excel.
+
 ### Auto-llenado del Benchmark desde Portafolio GR y OTC
 
 `position_gr` y `pnl_gr` del Benchmark se llenan automaticamente:
