@@ -138,19 +138,40 @@ class MarketDataLoader:
 
     # ── COP Forward Points ──
 
-    def fetch_cop_forwards(self, target_date: str = None) -> pd.DataFrame:
+    def fetch_cop_forwards(self, target_date: str = None,
+                           max_staleness_days: int = 5) -> pd.DataFrame:
         """
         Fetch COP forward points from cop_fwd_points table.
-        Returns DataFrame with columns: tenor, tenor_months, bid, ask, mid, fwd_points
-        """
-        if target_date is None:
-            target_date = self._latest_date("cop_fwd_points")
-        if target_date is None:
-            return pd.DataFrame()
 
+        When target_date is None, uses today. Falls back up to
+        max_staleness_days calendar days to cover weekends/holidays, but
+        rejects older data so we don't silently mix a month-old FXEmpire
+        scrape with a fresh fx_spot (that was the source of bug where
+        fwd_pts_cop came out ~5x too high).
+
+        Returns DataFrame with columns:
+          fecha, tenor, tenor_months, bid, ask, mid, fwd_points
+        Empty DataFrame if no data in the allowed window.
+        """
+        effective = target_date or date.today().isoformat()
+        min_allowed = (date.fromisoformat(effective)
+                       - timedelta(days=max_staleness_days)).isoformat()
+
+        latest = self._get(
+            "cop_fwd_points",
+            f"select=fecha&fecha=lte.{effective}&fecha=gte.{min_allowed}"
+            f"&order=fecha.desc&limit=1",
+        )
+        if not latest:
+            return pd.DataFrame(columns=[
+                "fecha", "tenor", "tenor_months", "bid", "ask", "mid", "fwd_points",
+            ])
+
+        actual_date = latest[0]["fecha"]
         data = self._get(
             "cop_fwd_points",
-            f"select=tenor,tenor_months,bid,ask,mid,fwd_points&fecha=eq.{target_date}&order=tenor_months.asc",
+            f"select=fecha,tenor,tenor_months,bid,ask,mid,fwd_points"
+            f"&fecha=eq.{actual_date}&order=tenor_months.asc",
         )
         return pd.DataFrame(data)
 
